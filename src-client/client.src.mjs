@@ -24,6 +24,7 @@ export async function mount(root, ctx) {
   const display = settings && settings.display === 'link' ? 'link' : 'iframe'
   const compat = !!(settings && settings.compat)
   const title = (settings && typeof settings.title === 'string') ? settings.title.trim() : ''
+  const music = !!(settings && settings.music)
 
   const style = document.createElement('style')
   style.textContent = `
@@ -70,7 +71,8 @@ export async function mount(root, ctx) {
     const open = () => {
       const win = window.open('', '_blank')
       if (!win) { ctx.ui.notify('浏览器拦截了新窗口，请允许弹窗后重试', 'error'); return }
-      const html = pageWithTitle(PAGE_HTML, title).replace('<head>', '<head>' + bridgeScript)
+      const seed = '<script>window.__hlSettings=' + JSON.stringify({ music: music }) + '</script>'
+      const html = pageWithTitle(PAGE_HTML, title).replace('<head>', '<head>' + seed + bridgeScript)
       win.document.open()
       win.document.write(html)
       win.document.close()
@@ -109,6 +111,7 @@ export async function mount(root, ctx) {
 
   root.classList.add('hl-root')
   root.innerHTML = parsed.body.innerHTML
+  window.__hlSettings = { music: music }
 
   let statsBusy = false
   window.__hlBridge = {
@@ -172,7 +175,8 @@ function mountSettings(root, ctx) {
       </select>
     </label>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式）</label>
-    <label><input type="checkbox" id="hls-compat"> 兼容模式（Big Sur / 旧显卡：DPR=1，关闭 will-change）</label>
+    <label><input type="checkbox" id="hls-compat"> 兼容模式（DPR=1，关闭 will-change 与 CSS 动画）</label>
+    <label><input type="checkbox" id="hls-music"> 启用背景音乐（首次点击页面后播放）</label>
     <div><button id="hls-save">保存</button> <span class="muted" id="hls-msg"></span></div>
     <div class="muted">页面与动效来自 HALOFLUX 原作；数据来自 Studio 会话/用量接口与本机指标。插件只读，不读取数据库文件，不发外部网络请求。</div>
     <table>
@@ -187,12 +191,14 @@ function mountSettings(root, ctx) {
   const displaySel = wrap.querySelector('#hls-display')
   const compatBox = wrap.querySelector('#hls-compat')
   const titleInput = wrap.querySelector('#hls-title')
+  const musicBox = wrap.querySelector('#hls-music')
   const msg = wrap.querySelector('#hls-msg')
   ctx.rpc.call('get-settings').then((s) => {
     animBox.checked = !(s && s.anim === false)
     displaySel.value = s && s.display === 'link' ? 'link' : 'iframe'
     compatBox.checked = !!(s && s.compat)
     titleInput.value = (s && s.title) || ''
+    musicBox.checked = !!(s && s.music)
   }).catch(() => { animBox.checked = true; displaySel.value = 'iframe' })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
@@ -200,7 +206,8 @@ function mountSettings(root, ctx) {
         anim: !!animBox.checked,
         display: displaySel.value === 'link' ? 'link' : 'iframe',
         compat: !!compatBox.checked,
-        title: titleInput.value.trim()
+        title: titleInput.value.trim(),
+        music: !!musicBox.checked
       })
       msg.textContent = '已保存，重新打开看板生效'
     } catch (error) {
