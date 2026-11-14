@@ -31,6 +31,9 @@ export function apply(ctx) {
   let lastViewerAt = 0
   let usageBusy = false
   let rateBusy = false
+  let lastUsageTry = 0
+  let lastSkillTry = 0
+  let lastRateTry = 0
   let lastRate = { total: 0, input: 0, output: 0, cacheRead: 0, at: 0 }
   const rateHistory = []
   const roleCache = new Map()
@@ -58,31 +61,35 @@ export function apply(ctx) {
     }
   }
 
-  async function pollUsage() {
-    if (usageBusy) return
+  async function pollUsage(run) {
+    if (usageBusy || !run || now() - lastUsageTry < 15000) return
     usageBusy = true
+    lastUsageTry = now()
     try {
-      const data = await ctx.host.request('/api/studio/usage/stats', { query: { days: 7 } })
+      const data = await run.host.request('/api/studio/usage/stats', { query: { days: 7 } })
       store.setUsage(data)
     } catch (error) {
-      ctx.log.warn('usage poll failed', String((error && error.message) || error))
+      ctx.log.warn('usage poll failed: ' + String((error && error.message) || error))
     } finally {
       usageBusy = false
     }
   }
 
-  async function pollSkills() {
+  async function pollSkills(run) {
+    if (!run || now() - lastSkillTry < 15000) return
+    lastSkillTry = now()
     try {
-      const data = await ctx.host.request('/api/hermes/skills/usage/stats')
+      const data = await run.host.request('/api/hermes/skills/usage/stats')
       const top = Array.isArray(data && data.top_skills) ? data.top_skills : []
       store.setSkills(top[0] ? { name: top[0].skill, count: top[0].total_count || top[0].count } : null, top)
     } catch (error) {
-      ctx.log.warn('skills poll failed', String((error && error.message) || error))
+      ctx.log.warn('skills poll failed: ' + String((error && error.message) || error))
     }
   }
 
-  async function pollRate() {
-    if (rateBusy) return
+  async function pollRate(run) {
+    if (rateBusy || !run || now() - lastRateTry < 2500) return
+    lastRateTry = now()
     const t = Math.floor(now() / 1000)
     const ids = []
     for (const s of store.sessions.values()) {
@@ -93,7 +100,7 @@ export function apply(ctx) {
     if (!ids.length) return
     rateBusy = true
     try {
-      const data = await ctx.host.request('/api/studio/sessions/usage', { query: { ids: ids.join(',') } })
+      const data = await run.host.request('/api/studio/sessions/usage', { query: { ids: ids.join(',') } })
       let total = 0
       let input = 0
       let output = 0
@@ -124,7 +131,7 @@ export function apply(ctx) {
       }
       lastRate = { total, input, output, cacheRead, at }
     } catch (error) {
-      ctx.log.warn('rate poll failed', String((error && error.message) || error))
+      ctx.log.warn('rate poll failed: ' + String((error && error.message) || error))
     } finally {
       rateBusy = false
     }
@@ -135,17 +142,11 @@ export function apply(ctx) {
   }
 
   const sessionTimer = setInterval(pollSessions, SESSION_POLL_MS)
-  const usageTimer = setInterval(() => { if (viewerActive(SKILL_POLL_MS)) pollUsage() }, USAGE_POLL_MS)
-  const skillTimer = setInterval(() => { if (viewerActive(SKILL_POLL_MS)) pollSkills() }, SKILL_POLL_MS)
-  const rateTimer = setInterval(() => { if (viewerActive()) pollRate() }, RATE_POLL_MS)
   const metricTimer = setInterval(() => { if (viewerActive()) metrics.sample() }, 2000)
   const pruneTimer = setInterval(() => conns.prune(), 30000)
 
   ctx.lifecycle.add(() => {
     clearInterval(sessionTimer)
-    clearInterval(usageTimer)
-    clearInterval(skillTimer)
-    clearInterval(rateTimer)
     clearInterval(metricTimer)
     clearInterval(pruneTimer)
     conns.closeAll()
@@ -170,7 +171,6 @@ export function apply(ctx) {
 
   pollSessions()
   metrics.sample()
-  setTimeout(() => { if (viewerActive(SKILL_POLL_MS)) { pollUsage(); pollSkills() } }, 1500)
 
   // P1 自检：无人打开页面时也落一份快照，便于开发期核对（发布前移除）
   const selfDumpTimer = setTimeout(() => {
@@ -218,9 +218,9 @@ export function apply(ctx) {
       net: metrics.state.net,
       uptimeSec: metrics.state.uptimeSec
     }
-    if (viewerActive(15000) && now() - store.usage.fetchedAt > 60000) pollUsage()
-    if (viewerActive(15000) && now() - store.skills.fetchedAt > 60000) pollSkills()
-    if (!lastRate.at) pollRate()
+    if (now() - store.usage.fetchedAt > 60000) pollUsage(run)
+    if (now() - store.skills.fetchedAt > 60000) pollSkills(run)
+    if (now() - lastRate.at > 2000) pollRate(run)
     writeDump('snapshot.json', snap)
     return snap
   })
@@ -229,10 +229,10 @@ export function apply(ctx) {
     lastViewerAt = now()
     const role = await roleOf(run)
     const profiles = role === 'super_admin' ? null : [run.identity.profile || 'default']
+    if (now() - store.usage.fetchedAt > 60000) await pollUsage(run)
+    if (now() - store.skills.fetchedAt > 60000) await pollSkills(run)
+    if (now() - lastRate.at > 2000) await pollRate(run)
     const snap = store.snapshot(profiles)
-    if (viewerActive(15000) && now() - store.usage.fetchedAt > 60000) pollUsage()
-    if (viewerActive(15000) && now() - store.skills.fetchedAt > 60000) pollSkills()
-    if (!lastRate.at) pollRate()
     return buildLegacyStats(snap, metrics.state, VERSION)
   })
 
