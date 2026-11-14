@@ -1,9 +1,9 @@
 {
   "id": "haloflux-ai-link",
   "name": "HALOFLUX ON Ekko",
-  "version": "0.8.11",
+  "version": "0.8.12",
   "apiVersion": 1,
-  "description": "Studio 原生 AI 运行看板：会话、令牌、思考过程、任务计划、工具调用、CPU/磁盘。",
+  "description": "AI 可视化看板：把 AI 的运行轨迹变成一场同屏联动、实时共振的演出。数据来自 Studio 原生 API 的会话与用量接口，以及本机硬件指标；插件只读，不读取数据库文件，也不发起任何外部网络请求。",
   "author": {
     "name": "Ryder191 (original HALOFLUX) / andychao2024 (Studio plugin)"
   },
