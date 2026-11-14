@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.6.7'
+const VERSION = '0.6.8'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -26,7 +26,7 @@ export function apply(ctx) {
   const startedAt = now()
   const store = createStore()
   const metrics = createMetrics()
-  const conns = createConnections({ host: ctx.host, store, log: ctx.log })
+  const conns = createConnections({ host: ctx.host, store, log: ctx.log, max: 4 })
   const dumpDir = ctx.paths && ctx.paths.dataDir ? ctx.paths.dataDir : null
   let lastViewerAt = 0
   let usageBusy = false
@@ -55,7 +55,7 @@ export function apply(ctx) {
       const t = Math.floor(now() / 1000)
       for (const s of list) {
         if (s.is_archived) continue
-        if (t - (Number(s.last_active) || 0) < 300) conns.ensure(s.id)
+        if (t - (Number(s.last_active) || 0) < 120) conns.ensure(s.id)
       }
     } catch (error) {
       ctx.log.warn('sessions poll failed', String((error && error.message) || error))
