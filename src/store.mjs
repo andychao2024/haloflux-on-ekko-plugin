@@ -23,7 +23,6 @@ export function createStore() {
   const sessionUsage = new Map()
   const contextLimits = new Map()
   const toolHistory = new Map()  // sessionId -> { at, list } 历史工具调用（服务端回填）
-  const sessionWorking = new Map()  // sessionId -> { working, at }
 
   function upsertSessions(list) {
     const seen = new Set()
@@ -213,16 +212,6 @@ export function createStore() {
     contextLimits.set(model, Math.round(limit))
   }
 
-  function setSessionWorking(sessionId, working) {
-    if (!sessionId) return
-    sessionWorking.set(sessionId, { working: !!working, at: Date.now() })
-  }
-
-  function isSessionWorking(sessionId, now = Date.now()) {
-    const rec = sessionWorking.get(sessionId)
-    return !!(rec && rec.working && now - rec.at < 10 * 60 * 1000)
-  }
-
   function setToolHistory(sessionId, list) {
     if (!sessionId) return
     toolHistory.set(sessionId, {
@@ -252,8 +241,7 @@ export function createStore() {
     const t = Math.floor(now / 1000)
 
     const sess = [...sessions.values()].filter((s) => ok(s.profile))
-    const activeSessions = sess.filter((s) =>
-      t - s.lastActive < ACTIVE_SEC || (streams.get(s.id) || {}).working || isSessionWorking(s.id, now))
+    const activeSessions = sess.filter((s) => t - s.lastActive < ACTIVE_SEC || (streams.get(s.id) || {}).working)
 
     const byAgent = new Map()
     for (const s of sess) {
@@ -269,8 +257,7 @@ export function createStore() {
       agg.lastActive = Math.max(agg.lastActive, s.lastActive || 0)
       agg.model = agg.model || s.model || null
       agg.provider = agg.provider || s.provider || null
-      agg.active = agg.active || t - (s.lastActive || 0) < ACTIVE_SEC ||
-        !!((streams.get(s.id) || {}).working) || isSessionWorking(s.id, now)
+      agg.active = agg.active || t - (s.lastActive || 0) < ACTIVE_SEC || !!((streams.get(s.id) || {}).working)
       byAgent.set(s.agent, agg)
     }
     const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, messages: 0, toolCalls: 0 }
@@ -310,7 +297,7 @@ export function createStore() {
     }
 
     const activeList = sess
-      .filter((s) => (s.lastActive && t - s.lastActive < 120) || isSessionWorking(s.id, now))
+      .filter((s) => (s.lastActive && t - s.lastActive < 120))
       .sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))
       .slice(0, 8)
       .map((s) => ({ id: s.id, agent: s.agent, profile: s.profile, title: s.title || '', lastActive: s.lastActive || 0 }))
@@ -411,7 +398,6 @@ export function createStore() {
   return {
     sessions, streams, plans, tools, events, usage, skills,
     upsertSessions, streamFor, appendDelta, setWorking, noteTool, setPlan,
-    addEvent, setUsage, setRate, setSkills, setSessionUsage, setContextLimit, setToolHistory,
-    setSessionWorking, isSessionWorking, backfillStream, snapshot
+    addEvent, setUsage, setRate, setSkills, setSessionUsage, setContextLimit, setToolHistory,    backfillStream, snapshot
   }
 }

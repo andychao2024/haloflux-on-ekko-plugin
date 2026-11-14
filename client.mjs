@@ -56,6 +56,9 @@ export async function mount(root, ctx) {
   const handles = new Map()       // sessionId -> HostSession
   const liveTools = []
   const backfillTried = new Set()
+  const toolBackfill = new Map()      // sessionId -> { at, entries }
+  const toolBusy = new Set()
+  const pendingSessions = new Map()   // sessionId -> { working, at, agent }
   let liveToolCount = 0
   let liveEvent = null
 
@@ -219,6 +222,31 @@ export async function mount(root, ctx) {
     }
   }
 
+  function backfillTools(sessions) {
+    if (!ctx.host || !ctx.host.sessions || typeof ctx.host.sessions.messages !== 'function') return
+    const now = Date.now()
+    for (const meta of (sessions || []).slice(0, 3)) {
+      if (!meta || !meta.id) continue
+      const rec = toolBackfill.get(meta.id)
+      if (rec && now - rec.at < 30000) continue
+      if (toolBusy.has(meta.id)) continue
+      toolBusy.add(meta.id)
+      // 先占位，失败时也等 30 秒再试，避免每秒轮询打满会话接口
+      toolBackfill.set(meta.id, { at: now, entries: rec ? rec.entries : [] })
+      ctx.host.sessions.messages(meta.id, { limit: 40 }).then((res) => {
+        const messages = Array.isArray(res && res.messages) ? res.messages : []
+        pendingSessions.set(meta.id, {
+          working: messagesWorking(messages),
+          at: Date.now(),
+          agent: meta.agent || 'unknown'
+        })
+        const entries = parseToolMessages(messages, 8, Date.now())
+          .map((item) => Object.assign({}, item, { agent: meta.agent || 'unknown' }))
+        toolBackfill.set(meta.id, { at: Date.now(), entries })
+      }).catch(() => { /* ignore */ }).finally(() => toolBusy.delete(meta.id))
+    }
+  }
+
   function planFromRaw(raw, slot) {
     if (!raw || !Array.isArray(raw.plan)) return null
     const steps = raw.plan.map((step) => ({ id: step.id, step: clipText(step.step || '', 120), status: step.status || 'pending' }))
@@ -268,8 +296,16 @@ export async function mount(root, ctx) {
       ai.taskPlan = Object.assign({}, plans[0], { plans })
     }
 
-    // 服务端已经把历史工具调用放进 recentTools；这里只叠加页面端实时收到的调用。
-    const baseTools = Array.isArray(ai.recentTools) ? ai.recentTools : []
+    // 历史工具来自页面端的会话历史回填；再叠加实时事件收到的调用。
+    const backfilledTools = []
+    for (const rec of toolBackfill.values()) {
+      for (const tool of rec.entries) {
+        backfilledTools.push(Object.assign({}, tool, {
+          ageSec: tool.at ? Math.max(0, Math.round((Date.now() - tool.at) / 1000)) : null
+        }))
+      }
+    }
+    const baseTools = backfilledTools.concat(Array.isArray(ai.recentTools) ? ai.recentTools : [])
     if (liveTools.length || baseTools.length) {
       const merged = []
       for (const tool of liveTools.concat(baseTools).sort((a, b) => (b.at || 0) - (a.at || 0))) {
@@ -295,6 +331,9 @@ export async function mount(root, ctx) {
     for (const slot of live.values()) {
       if (slot.working && slot.ts && Date.now() - slot.ts > 10 * 60 * 1000) slot.working = false
       if (slot.working) workingAgents.add(slot.agent)
+    }
+    for (const rec of pendingSessions.values()) {
+      if (rec.working && Date.now() - rec.at < 5 * 60 * 1000) workingAgents.add(rec.agent)
     }
     if (workingAgents.size && Array.isArray(ai.agents)) {
       ai.agents = ai.agents.map((item) => workingAgents.has(item.agent)
@@ -322,7 +361,8 @@ export async function mount(root, ctx) {
             liveList.push(meta)
           }
           ensureLive(liveList)
-          backfill(data.activeSessions)
+          backfill(data.recentSessions)
+          backfillTools(data.recentSessions)
         }
         window.__hlBridge.last = data
         return data
@@ -410,4 +450,123 @@ function mountSettings(root, ctx) {
       msg.textContent = '保存失败：' + (error.message || error)
     }
   }
+}
+
+/**
+ * 从 Studio 会话历史中提取最近的工具调用。
+ * assistant 消息的 tool_calls 提供名称与参数；tool 消息提供结果状态。
+ * 状态口径与 docker 版一致：有结果是 done / error，没有结果且 30 分钟内是
+ * running（面板显示青色），更早则是 idle（灰色）。
+ * 只读、无副作用，方便单测。
+ */
+const RUNNING_WINDOW_MS = 30 * 60 * 1000
+const ARG_KEYS = ['command', 'file_path', 'path', 'pattern', 'query', 'url',
+  'prompt', 'description', 'session_id', 'sessionId', 'skill', 'tool', 'action', 'glob']
+
+/** 与 docker 版一致：从工具参数对象里挑一个最有代表性的一行摘要。 */
+function toolArg(input) {
+  if (!input || typeof input !== 'object') return ''
+  let v = null
+  for (const key of ARG_KEYS) {
+    const cand = input[key]
+    if (typeof cand === 'string' && cand.trim()) { v = cand; break }
+  }
+  if (v === null) {
+    for (const key of Object.keys(input)) {
+      if (typeof input[key] === 'string' && input[key].trim()) { v = input[key]; break }
+    }
+  }
+  if (v === null) return ''
+  return String(v).replace(/\s+/g, ' ').trim().slice(0, 160)
+}
+
+function resultState(content) {
+  // Studio 用 "Error: …" 前缀表示工具失败；不要被正文里的 error 字样误判
+  return /^\s*error\b/i.test(String(content || '')) ? 'error' : 'done'
+}
+
+function parseToolMessages(messages, limit = 8, now = Date.now()) {
+  const entries = []
+  const list = Array.isArray(messages) ? messages : []
+  const results = new Map()   // tool_call_id -> done | error
+
+  for (const message of list) {
+    if (!message || message.role !== 'tool') continue
+    if (message.tool_call_id) results.set(message.tool_call_id, resultState(message.content))
+  }
+
+  const fallbackState = (at) => {
+    if (!at) return 'idle'
+    return now - at < RUNNING_WINDOW_MS ? 'running' : 'idle'
+  }
+
+  for (let i = 0; i < list.length; i++) {
+    const message = list[i]
+    if (!message) continue
+    const at = Number(message.timestamp) * 1000 || 0
+    if (message.role === 'assistant' && message.tool_calls) {
+      let calls = message.tool_calls
+      if (typeof calls === 'string') {
+        try { calls = JSON.parse(calls) } catch (_) { calls = null }
+      }
+      if (!Array.isArray(calls)) continue
+      for (const call of calls) {
+        const fn = call && call.function ? call.function : call
+        if (!fn || !fn.name) continue
+        let raw = fn.arguments
+        if (typeof raw === 'string') {
+          const text = raw.trim()
+          if (text.startsWith('{') || text.startsWith('[')) {
+            try { raw = JSON.parse(text) } catch (_) { /* 保留原始字符串 */ }
+          }
+        }
+        const arg = typeof raw === 'string'
+          ? raw.replace(/\s+/g, ' ').trim().slice(0, 160)
+          : toolArg(raw)
+        const id = call && call.id ? call.id : ''
+        entries.push({
+          at,
+          name: String(fn.name),
+          arg,
+          state: (id && results.get(id)) || fallbackState(at),
+          order: i
+        })
+      }
+    } else if (message.role === 'tool' && message.tool_name) {
+      if (message.tool_call_id && results.has(message.tool_call_id)) {
+        // 已经有对应的 assistant 调用，不重复显示结果消息
+        continue
+      }
+      entries.push({
+        at,
+        name: String(message.tool_name),
+        arg: '',
+        state: resultState(message.content),
+        order: i
+      })
+    }
+  }
+
+  entries.sort((a, b) => (b.at || 0) - (a.at || 0) || b.order - a.order)
+  return entries.slice(0, limit).map(({ at, name, arg, state }) => ({ at, name, arg, state }))
+}
+
+/**
+ * 判断一个会话当前是否仍在工作。
+ * 与 docker 版一致：最后一条消息是 user / tool，或者 assistant 带着尚未
+ * 返回的 tool_calls，就说明这一轮还没结束。CodeBuddy 等外部 Agent 的
+ * session.last_active 只在回合结束时更新，不能作为运行状态的依据。
+ */
+function messagesWorking(messages) {
+  const last = Array.isArray(messages) ? messages[messages.length - 1] : null
+  if (!last) return false
+  if (last.role === 'user' || last.role === 'tool') return true
+  if (last.role === 'assistant' && last.tool_calls) {
+    let calls = last.tool_calls
+    if (typeof calls === 'string') {
+      try { calls = JSON.parse(calls) } catch (_) { calls = null }
+    }
+    return Array.isArray(calls) && calls.length > 0
+  }
+  return false
 }

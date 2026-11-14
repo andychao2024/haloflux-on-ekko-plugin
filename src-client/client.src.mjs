@@ -54,6 +54,9 @@ export async function mount(root, ctx) {
   const handles = new Map()       // sessionId -> HostSession
   const liveTools = []
   const backfillTried = new Set()
+  const toolBackfill = new Map()      // sessionId -> { at, entries }
+  const toolBusy = new Set()
+  const pendingSessions = new Map()   // sessionId -> { working, at, agent }
   let liveToolCount = 0
   let liveEvent = null
 
@@ -217,6 +220,31 @@ export async function mount(root, ctx) {
     }
   }
 
+  function backfillTools(sessions) {
+    if (!ctx.host || !ctx.host.sessions || typeof ctx.host.sessions.messages !== 'function') return
+    const now = Date.now()
+    for (const meta of (sessions || []).slice(0, 3)) {
+      if (!meta || !meta.id) continue
+      const rec = toolBackfill.get(meta.id)
+      if (rec && now - rec.at < 30000) continue
+      if (toolBusy.has(meta.id)) continue
+      toolBusy.add(meta.id)
+      // 先占位，失败时也等 30 秒再试，避免每秒轮询打满会话接口
+      toolBackfill.set(meta.id, { at: now, entries: rec ? rec.entries : [] })
+      ctx.host.sessions.messages(meta.id, { limit: 40 }).then((res) => {
+        const messages = Array.isArray(res && res.messages) ? res.messages : []
+        pendingSessions.set(meta.id, {
+          working: messagesWorking(messages),
+          at: Date.now(),
+          agent: meta.agent || 'unknown'
+        })
+        const entries = parseToolMessages(messages, 8, Date.now())
+          .map((item) => Object.assign({}, item, { agent: meta.agent || 'unknown' }))
+        toolBackfill.set(meta.id, { at: Date.now(), entries })
+      }).catch(() => { /* ignore */ }).finally(() => toolBusy.delete(meta.id))
+    }
+  }
+
   function planFromRaw(raw, slot) {
     if (!raw || !Array.isArray(raw.plan)) return null
     const steps = raw.plan.map((step) => ({ id: step.id, step: clipText(step.step || '', 120), status: step.status || 'pending' }))
@@ -266,8 +294,16 @@ export async function mount(root, ctx) {
       ai.taskPlan = Object.assign({}, plans[0], { plans })
     }
 
-    // 服务端已经把历史工具调用放进 recentTools；这里只叠加页面端实时收到的调用。
-    const baseTools = Array.isArray(ai.recentTools) ? ai.recentTools : []
+    // 历史工具来自页面端的会话历史回填；再叠加实时事件收到的调用。
+    const backfilledTools = []
+    for (const rec of toolBackfill.values()) {
+      for (const tool of rec.entries) {
+        backfilledTools.push(Object.assign({}, tool, {
+          ageSec: tool.at ? Math.max(0, Math.round((Date.now() - tool.at) / 1000)) : null
+        }))
+      }
+    }
+    const baseTools = backfilledTools.concat(Array.isArray(ai.recentTools) ? ai.recentTools : [])
     if (liveTools.length || baseTools.length) {
       const merged = []
       for (const tool of liveTools.concat(baseTools).sort((a, b) => (b.at || 0) - (a.at || 0))) {
@@ -293,6 +329,9 @@ export async function mount(root, ctx) {
     for (const slot of live.values()) {
       if (slot.working && slot.ts && Date.now() - slot.ts > 10 * 60 * 1000) slot.working = false
       if (slot.working) workingAgents.add(slot.agent)
+    }
+    for (const rec of pendingSessions.values()) {
+      if (rec.working && Date.now() - rec.at < 5 * 60 * 1000) workingAgents.add(rec.agent)
     }
     if (workingAgents.size && Array.isArray(ai.agents)) {
       ai.agents = ai.agents.map((item) => workingAgents.has(item.agent)
@@ -320,7 +359,8 @@ export async function mount(root, ctx) {
             liveList.push(meta)
           }
           ensureLive(liveList)
-          backfill(data.activeSessions)
+          backfill(data.recentSessions)
+          backfillTools(data.recentSessions)
         }
         window.__hlBridge.last = data
         return data

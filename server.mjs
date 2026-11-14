@@ -4,16 +4,14 @@ import { assertContracts, registerRpc } from './sdk/harness/contracts.mjs'
 import { createStore } from './src/store.mjs'
 import { createMetrics } from './src/metrics.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
-import { parseToolMessages } from './src/tool-history.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.15'
+const VERSION = '0.8.16'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
 const SKILL_POLL_MS = 60000
 const RATE_POLL_MS = 2000
-const TOOL_POLL_MS = 30000
 const VIEWER_TTL_MS = 30000
 
 const now = () => Date.now()
@@ -87,50 +85,6 @@ export function apply(ctx) {
   const rateDeltas = []         // { at, tok, out } 最近 90 秒
   let lastRateAt = 0
   const contextLimitBusy = new Set()
-
-  /** 与 docker 版一致：最后一条消息是 user/tool，或 assistant 带着尚未返回的
-   *  tool_calls，就认为这个会话仍在工作。CodeBuddy 等外部 Agent 的 session
-   *  last_active 只在回合结束时更新，不能作为“正在运行”的唯一依据。 */
-  function messagesWorking(messages) {
-    const last = messages[messages.length - 1]
-    if (!last) return false
-    if (last.role === 'user' || last.role === 'tool') return true
-    if (last.role === 'assistant' && last.tool_calls) {
-      let calls = last.tool_calls
-      if (typeof calls === 'string') {
-        try { calls = JSON.parse(calls) } catch (_) { calls = null }
-      }
-      return Array.isArray(calls) && calls.length > 0
-    }
-    return false
-  }
-
-  const toolTriedAt = new Map()
-  async function pollTools(run, sessions) {
-    if (!run || !Array.isArray(sessions)) return
-    for (const meta of sessions.slice(0, 3)) {
-      if (!meta || !meta.id) continue
-      if (now() - (toolTriedAt.get(meta.id) || 0) < TOOL_POLL_MS) continue
-      toolTriedAt.set(meta.id, now())
-      try {
-        const res = await run.host.sessions.messages(meta.id, { limit: 40 })
-        const messages = Array.isArray(res && res.messages) ? res.messages : []
-        store.setSessionWorking(meta.id, messagesWorking(messages))
-        const list = parseToolMessages(messages).map((item) => ({
-          profile: meta.profile || 'default',
-          agent: meta.agent || 'unknown',
-          sessionId: meta.id,
-          at: item.at,
-          name: item.name,
-          arg: item.arg,
-          state: item.state
-        }))
-        store.setToolHistory(meta.id, list)
-      } catch (error) {
-        ctx.log.warn('tool history poll failed: ' + String((error && error.message) || error))
-      }
-    }
-  }
 
   async function pollRate(run) {
     if (rateBusy || !run || now() - lastRateTry < 2500) return
@@ -253,7 +207,6 @@ export function apply(ctx) {
     if (now() - store.skills.fetchedAt > 60000) await pollSkills(run)
     if (now() - lastRateAt > 2500) await pollRate(run)
     await pollSessions(run)
-    await pollTools(run, store.snapshot(profiles).recentSessions)
     const snap = store.snapshot(profiles)
     if (snap.current && snap.current.model && (!snap.context || !snap.context.limit)) {
       const model = snap.current.model
