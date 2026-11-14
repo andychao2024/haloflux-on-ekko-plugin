@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.6.6'
+const VERSION = '0.6.7'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -49,6 +49,9 @@ export function apply(ctx) {
       const listed = await ctx.host.sessions.list({ limit: 200 })
       const list = Array.isArray(listed && listed.sessions) ? listed.sessions : []
       store.upsertSessions(list)
+      // 只有看板页面在请求数据时才建立实时连接；设置页/无人查看时保持完全安静，
+      // 避免连接状态变化反复刷新宿主里的插件快照。
+      if (!viewerActive(45000)) return
       const t = Math.floor(now() / 1000)
       for (const s of list) {
         if (s.is_archived) continue
