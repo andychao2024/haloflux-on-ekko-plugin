@@ -6,7 +6,7 @@ import { createMetrics } from './src/metrics.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.19'
+const VERSION = '0.8.20'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -82,6 +82,7 @@ export function apply(ctx) {
   }
 
   const prevUsage = new Map()   // sessionId -> { tok, out }
+  let prevRateIds = new Set()   // 上一次参与统计的会话，避免会话进出造成假峰值
   const rateDeltas = []         // { at, tok, out } 最近 90 秒
   let lastRateAt = 0
   const contextLimitBusy = new Set()
@@ -89,12 +90,15 @@ export function apply(ctx) {
   async function pollRate(run) {
     if (rateBusy || !run || now() - lastRateTry < 2500) return
     lastRateTry = now()
-    const t = Math.floor(now() / 1000)
-    const ids = []
-    for (const s of store.sessions.values()) {
-      if (s.archived) continue
-      if (t - (s.lastActive || 0) < 600 || (store.streams.get(s.id) || {}).working) ids.push(s.id)
-      if (ids.length >= 24) break
+    // 最近 6 个会话都纳入统计：Hermes CLI 等外部 Agent 的 last_active
+    // 不一定在生成过程中刷新，只按 600 秒窗口会把它漏掉。
+    const ids = [...store.sessions.values()]
+      .filter((s) => !s.archived)
+      .sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))
+      .slice(0, 6)
+      .map((s) => s.id)
+    for (const [id, stream] of store.streams) {
+      if (stream.working && !ids.includes(id)) ids.push(id)
     }
     if (!ids.length) return
     rateBusy = true
@@ -111,8 +115,8 @@ export function apply(ctx) {
         const tok = (row.input_tokens || 0) + (row.output_tokens || 0) + (row.cache_read_tokens || 0)
         const out = (row.output_tokens || 0)
         const prev = prevUsage.get(id)
-        // 只按“同一会话的累计增量”计数；会话进出统计集合不会造成总量跳变
-        if (prev) {
+        // 只统计连续两次都在采样集合里的会话；否则中断后重入会被当成瞬时爆发
+        if (prev && prevRateIds.has(id)) {
           tokDelta += Math.max(0, tok - prev.tok)
           outDelta += Math.max(0, out - prev.out)
         }
@@ -120,14 +124,15 @@ export function apply(ctx) {
         input += row.input_tokens || 0
         cacheRead += row.cache_read_tokens || 0
       }
+      prevRateIds = new Set(ids)
       const at = now()
       rateDeltas.push({ at, tok: tokDelta, out: outDelta })
-      while (rateDeltas.length > 2 && at - rateDeltas[0].at > 90000) rateDeltas.shift()
+      while (rateDeltas.length > 2 && at - rateDeltas[0].at > 20000) rateDeltas.shift()
       let tokSum = 0
       let outSum = 0
       for (const item of rateDeltas) { tokSum += item.tok; outSum += item.out }
-      // 90 秒窗口；窗口不满时按实际跨度折算，避免开头数值虚高
-      const span = Math.max(5, Math.min(90, (at - rateDeltas[0].at) / 1000))
+      // 20 秒窗口；窗口不满时按实际跨度折算，避免开头数值虚高
+      const span = Math.max(5, Math.min(20, (at - rateDeltas[0].at) / 1000))
       const hit = input + cacheRead > 0 ? cacheRead / (input + cacheRead) : 0
       store.setRate({
         tokensPerSec: round(tokSum / span, 1),
@@ -191,7 +196,6 @@ export function apply(ctx) {
     }
     if (now() - store.usage.fetchedAt > 60000) pollUsage(run)
     if (now() - store.skills.fetchedAt > 60000) pollSkills(run)
-    if (now() - lastRateAt > 2500) pollRate(run)
     return snap
   })
 
@@ -205,7 +209,6 @@ export function apply(ctx) {
     // 否则 RPC 返回时 run.signal 中止，请求会被取消（表现为 “operation was aborted”）。
     if (now() - store.usage.fetchedAt > 60000) await pollUsage(run)
     if (now() - store.skills.fetchedAt > 60000) await pollSkills(run)
-    if (now() - lastRateAt > 2500) await pollRate(run)
     await pollSessions(run)
     const snap = store.snapshot(profiles)
     if (snap.current && snap.current.model && (!snap.context || !snap.context.limit)) {
@@ -220,6 +223,17 @@ export function apply(ctx) {
       }
     }
     return buildLegacyStats(snap, metrics.state, VERSION)
+  })
+
+  registerRpc(ctx, contract, 'rate', async (_input, run) => {
+    lastViewerAt = now()
+    await pollRate(run)
+    const rate = store.rate
+    return {
+      tokensPerSec: round(rate.tokensPerSec || 0, 1),
+      outputPerSec: round(rate.outputPerSec || 0, 1),
+      cacheHit: round(rate.cacheHit || 0, 1)
+    }
   })
 
   registerRpc(ctx, contract, 'get-settings', async (_input, run) => {

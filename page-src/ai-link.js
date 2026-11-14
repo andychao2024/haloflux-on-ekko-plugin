@@ -1275,7 +1275,7 @@
     // Keep a low "still alive" floor that fades out over ~20s after the last event.
     var age = isNum(ai.lastEventAgeSec) ? ai.lastEventAgeSec : 999;
     // Studio 的 usage 行在两次模型调用之间可能隔 30~60 秒（工具执行），
-    // 底噪跟着 90 秒吞吐窗口一起衰减，避免任务在跑却整屏判为空闲。
+    // 底噪跟着 20 秒吞吐窗口一起衰减，避免任务在跑却整屏判为空闲。
     var recent = age <= 2 ? 1 : Math.max(0, 1 - (age - 2) / 88);
 
     if (age > 90) tpsE = 0;
@@ -2108,7 +2108,7 @@
     // 光环上的浮动标注
     if (CON.checks) {
       var tps = isNum(ai.tokensPerSec) ? ai.tokensPerSec : 0;
-      CON.checks[0] = ['令牌吞吐', fmtRate(tps) + ' tok/s · 90 秒窗口'];
+      CON.checks[0] = ['令牌吞吐', fmtRate(tps) + ' tok/s · 20 秒窗口'];
       CON.checks[1] = ['当前模型', (ai.model || '—') + ' · ' + (ai.provider || '—')];
       CON.checks[2] = ['工具调用', fmtInt(ai.toolCalls) + ' 次 · 消息 ' + fmtInt(ai.messages)];
       CON.checks[3] = ['会话令牌', fmtCompact(ai.tokensTotal) + ' · 上下文 ' + fmtCtx(ai)];
@@ -3516,7 +3516,7 @@
       var mx = 0, sum = 0, n = CON.hist.tps.length;
       for (var i = 0; i < n; i++) { if (CON.hist.tps[i] > mx) mx = CON.hist.tps[i]; sum += CON.hist.tps[i]; }
       return {
-        label: '令牌吞吐', value: fmtRate(ai.tokensPerSec) + ' tok/s', sub: '最近 90 秒窗口',
+        label: '令牌吞吐', value: fmtRate(ai.tokensPerSec) + ' tok/s', sub: '最近 20 秒窗口',
         lines: [
           '90 秒峰值 <b>' + fmtRate(mx) + '</b> tok/s',
           '90 秒均值 <b>' + fmtRate(n ? sum / n : 0) + '</b> tok/s',

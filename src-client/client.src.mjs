@@ -57,6 +57,17 @@ export async function mount(root, ctx) {
   const toolBackfill = new Map()      // sessionId -> { at, entries }
   const toolBusy = new Set()
   const pendingSessions = new Map()   // sessionId -> { working, at, agent }
+  let liveRate = null
+  let rateBusy = false
+
+  async function refreshRate() {
+    if (rateBusy) return
+    rateBusy = true
+    try {
+      const rate = await ctx.rpc.call('rate')
+      if (rate) liveRate = rate
+    } catch (_) { /* ignore */ } finally { rateBusy = false }
+  }
   let liveToolCount = 0
   let liveEvent = null
 
@@ -226,10 +237,10 @@ export async function mount(root, ctx) {
     for (const meta of (sessions || []).slice(0, 3)) {
       if (!meta || !meta.id) continue
       const rec = toolBackfill.get(meta.id)
-      if (rec && now - rec.at < 30000) continue
+      if (rec && now - rec.at < 10000) continue
       if (toolBusy.has(meta.id)) continue
       toolBusy.add(meta.id)
-      // 先占位，失败时也等 30 秒再试，避免每秒轮询打满会话接口
+      // 先占位，失败时也等 10 秒再试，避免每秒轮询打满会话接口
       toolBackfill.set(meta.id, { at: now, entries: rec ? rec.entries : [] })
       ctx.host.sessions.messages(meta.id, { limit: 40 }).then((res) => {
         const messages = Array.isArray(res && res.messages) ? res.messages : []
@@ -322,6 +333,11 @@ export async function mount(root, ctx) {
       ai.lastEvent = liveEvent.type
       ai.lastEventAgeSec = Math.max(0, Math.round((Date.now() - liveEvent.at) / 1000))
     }
+    if (liveRate) {
+      ai.tokensPerSec = liveRate.tokensPerSec
+      ai.outputTokensPerSec = liveRate.outputPerSec
+      ai.cacheHitRate = liveRate.cacheHit
+    }
 
     // 实时层：正在收到事件的 Agent 立即标成活跃，不依赖 session.last_active
     // （CodeBuddy 等外部 Agent 的 last_active 通常在回合结束后才更新）。
@@ -382,7 +398,11 @@ export async function mount(root, ctx) {
     window.__hlApplySettings({ anim, compat })
   }
 
+  refreshRate()
+  const rateTimer = setInterval(refreshRate, 2500)
+
   ctx.lifecycle.add(() => {
+    clearInterval(rateTimer)
     for (const handle of handles.values()) {
       try { if (handle && handle.close) handle.close() } catch (_) { /* ignore */ }
     }

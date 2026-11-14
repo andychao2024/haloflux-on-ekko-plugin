@@ -396,8 +396,9 @@ export function createStore() {
   }
 
   return {
-    sessions, streams, plans, tools, events, usage, skills,
+    sessions, streams, plans, tools, events, usage, skills, rate,
     upsertSessions, streamFor, appendDelta, setWorking, noteTool, setPlan,
-    addEvent, setUsage, setRate, setSkills, setSessionUsage, setContextLimit, setToolHistory,    backfillStream, snapshot
+    addEvent, setUsage, setRate, setSkills, setSessionUsage, setContextLimit, setToolHistory,
+    backfillStream, snapshot
   }
 }

@@ -61,6 +61,32 @@
       "properties": {},
       "required": [],
       "additionalProperties": true
+    },
+    "rate": {
+      "type": "object",
+      "description": "最近 20 秒的令牌吞吐与缓存命中率。",
+      "properties": {
+        "tokensPerSec": {
+          "type": "number",
+          "description": "每秒令牌数（输入+输出+缓存读）。"
+        },
+        "outputPerSec": {
+          "type": "number",
+          "description": "每秒输出令牌数。"
+        },
+        "cacheHit": {
+          "type": "number",
+          "description": "缓存命中率百分比。",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "tokensPerSec",
+        "outputPerSec",
+        "cacheHit"
+      ],
+      "additionalProperties": false
     }
   },
   "rpc": {
@@ -83,6 +109,11 @@
       "description": "返回 /stats 兼容快照。",
       "input": "empty",
       "output": "stats"
+    },
+    "rate": {
+      "description": "刷新并读取当前令牌吞吐；由页面独立轮询，避免阻塞 stats。",
+      "input": "empty",
+      "output": "rate"
     }
   },
   "tools": {},
