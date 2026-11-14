@@ -44,9 +44,17 @@ Studio → 插件中心 → 安装 → 本地目录或 `github:` 地址，启用
 开发：
 
 ```bash
-npm run build          # 从 docker 版 index.html 生成页面并打包 client.mjs
+npm run build          # 用 page-src/ 快照生成页面并打包 client.mjs
 npm run harness:check
 npm test
+```
+
+`page-src/` 是 docker 版 `index.html` / `wp.js` / `ai-link.js` 的只读快照，
+保证 CI 和没有 docker 目录的机器也能构建。从 docker 目录同步后重新构建：
+
+```bash
+cp /path/to/haloflux-ai-link/{index.html,wp.js,ai-link.js} page-src/
+npm run build
 ```
 
 ## 归属与许可

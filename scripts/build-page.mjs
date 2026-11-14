@@ -13,7 +13,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const dir = process.argv[2] || '/vol1/1000/appdata/ai-link/haloflux-ai-link'
+// 默认用仓库内 page-src/ 的快照，保证 CI/其他机器可复现；
+// 从 docker 目录重新同步：node scripts/build-page.mjs /path/to/haloflux-ai-link
+const dir = process.argv[2] || join(root, 'page-src')
 const html = readFileSync(join(dir, 'index.html'), 'utf8')
 const wp = readFileSync(join(dir, 'wp.js'), 'utf8')
 const ai = readFileSync(join(dir, 'ai-link.js'), 'utf8')
