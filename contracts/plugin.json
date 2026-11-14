@@ -17,9 +17,11 @@
       "type": "object",
       "description": "当前用户的显示设置。",
       "properties": {
-        "compact": { "type": "boolean", "description": "紧凑布局；默认 false。" }
+        "compact": { "type": "boolean", "description": "紧凑布局；默认 false。" },
+        "anim": { "type": "boolean", "description": "显示原版动效舞台；默认 true。" },
+        "fps": { "type": "integer", "description": "舞台帧率上限：30 或 60；默认 30。", "enum": [30, 60] }
       },
-      "required": ["compact"],
+      "required": ["compact", "anim", "fps"],
       "additionalProperties": false
     },
     "saved": {

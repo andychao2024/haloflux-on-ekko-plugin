@@ -4,6 +4,8 @@
  * @param {import('@ekko-studio/plugin-sdk').ClientContext} ctx
  */
 
+import { STAGE_HTML } from './stage-html.mjs'
+
 const CHIP_SLOTS = 5
 const MIN_CHIPS = 3
 const CHIP_ROT_MS = 6000
@@ -106,8 +108,10 @@ function chipWindow(state, key, items, slots) {
 export async function mount(root, ctx) {
   if (ctx.view === 'settings') return mountSettings(root, ctx)
 
-  const settings = await ctx.rpc.call('get-settings').catch(() => ({ compact: false }))
+  const settings = await ctx.rpc.call('get-settings').catch(() => ({ compact: false, anim: true, fps: 30 }))
   const compact = !!(settings && settings.compact)
+  const anim = !(settings && settings.anim === false)
+  const fps = settings && settings.fps === 60 ? 60 : 30
 
   const style = document.createElement('style')
   style.textContent = `
@@ -117,6 +121,14 @@ export async function mount(root, ctx) {
           color:var(--text-primary,#e8eaf0); padding:14px; display:flex; flex-direction:column; gap:10px;
           height:100%; box-sizing:border-box; overflow:auto; }
     .hl * { box-sizing:border-box; }
+    .hl-root { position:relative; height:100%; overflow:hidden; background:#05070a; }
+    .hl-stage { position:absolute; inset:0; width:100%; height:100%; border:0; z-index:0;
+          pointer-events:none; background:#05070a; }
+    .hl.hl-glass { background:transparent; }
+    .hl.hl-glass .hl-hud, .hl.hl-glass .hl-kpi, .hl.hl-glass .hl-panel {
+          background:rgba(6,9,11,.46); backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px);
+          box-shadow:0 10px 30px rgba(0,0,0,.35); }
+    .hl.hl-glass .hl-head { text-shadow:0 1px 4px rgba(0,0,0,.8); }
     .hl .hl-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
     .hl .hl-title { font-size:14px; letter-spacing:1px; font-weight:700; color:var(--hl-cyan); }
     .hl .hl-dot { width:6px; height:6px; border-radius:50%; background:var(--hl-cyan); box-shadow:0 0 6px var(--hl-cyan); }
@@ -131,7 +143,7 @@ export async function mount(root, ctx) {
     .hl .hl-kpi { border:1px solid var(--hl-line); background:var(--hl-bg); border-radius:8px; padding:7px 9px; }
     .hl .hl-kpi b { display:block; font-size:16px; }
     .hl .hl-kpi span { color:var(--hl-dim); font-size:9px; letter-spacing:1px; }
-    .hl .hl-grid { flex:1; min-height:0; display:grid; grid-template-columns:repeat(4,1fr); grid-template-rows:repeat(2,minmax(0,1fr)); gap:10px; }
+    .hl .hl-grid { flex:0 0 54%; margin-top:auto; min-height:0; display:grid; grid-template-columns:repeat(4,1fr); grid-template-rows:repeat(2,minmax(0,1fr)); gap:10px; }
     .hl .hl-panel { border:1px solid var(--hl-line); background:var(--hl-panel); border-radius:8px;
           padding:8px 10px; min-height:${compact ? 150 : 178}px; display:flex; flex-direction:column; gap:6px; min-width:0; }
     .hl .hl-panel h3 { margin:0; font-size:10.5px; letter-spacing:1.2px; color:var(--hl-cyan); display:flex; align-items:center; gap:6px; white-space:nowrap; }
@@ -175,9 +187,28 @@ export async function mount(root, ctx) {
     @media (max-width:700px){ .hl .hl-grid{grid-template-columns:1fr;} .hl .hl-kpis{grid-template-columns:repeat(2,1fr);} }
   `
   root.append(style)
+  root.classList.add('hl-root')
+
+  let stageFrame = null
+  let stageWin = null
+  if (anim) {
+    stageFrame = document.createElement('iframe')
+    stageFrame.className = 'hl-stage'
+    stageFrame.setAttribute('aria-hidden', 'true')
+    stageFrame.setAttribute('sandbox', 'allow-scripts allow-same-origin')
+    stageFrame.srcdoc = STAGE_HTML
+    stageFrame.addEventListener('load', () => {
+      try {
+        stageWin = stageFrame.contentWindow
+        if (stageWin && stageWin.__stageSetFps) stageWin.__stageSetFps(fps)
+        if (stageWin && stageWin.__stagePause) stageWin.__stagePause(document.visibilityState !== 'visible')
+      } catch (_) { /* ignore */ }
+    })
+    root.append(stageFrame)
+  }
 
   const wrap = document.createElement('div')
-  wrap.className = 'hl'
+  wrap.className = 'hl' + (anim ? ' hl-glass' : '')
   wrap.innerHTML = `
     <div class="hl-head">
       <span class="hl-dot"></span><span class="hl-title">HALOFLUX AI LINK</span>
@@ -419,6 +450,24 @@ export async function mount(root, ctx) {
     setLine(idx, '运行', fmtUptime(host.uptimeSec), 0)
   }
 
+  const stageParams = {}
+  function driveStage(snap) {
+    if (!stageWin || !stageWin.__stageParam) return
+    const tps = (snap.rate && snap.rate.tokensPerSec) || 0
+    const energy = Math.min(1, Math.sqrt(tps / 2500))
+    const next = {
+      tempo: 0.6 + 0.9 * energy,
+      ringSpeed: 0.6 + 0.6 * energy,
+      glow: 1.05 + 0.35 * energy
+    }
+    for (const key of Object.keys(next)) {
+      if (stageParams[key] == null || Math.abs(stageParams[key] - next[key]) > 0.03) {
+        stageParams[key] = next[key]
+        stageWin.__stageParam(key, next[key])
+      }
+    }
+  }
+
   let timer = null
   let busy = false
 
@@ -439,6 +488,7 @@ export async function mount(root, ctx) {
       renderTools(snap)
       renderAgents(snap)
       renderSystem(snap)
+      driveStage(snap)
     } catch (error) {
       wrap.classList.add('off')
       $('hl-state').textContent = '离线'
@@ -452,7 +502,13 @@ export async function mount(root, ctx) {
 
   await tick()
   timer = setInterval(tick, 1000)
-  const onVis = () => { if (document.visibilityState === 'visible') tick() }
+  const onVis = () => {
+    const visible = document.visibilityState === 'visible'
+    if (stageWin && stageWin.__stagePause) {
+      try { stageWin.__stagePause(!visible) } catch (_) { /* ignore */ }
+    }
+    if (visible) tick()
+  }
   document.addEventListener('visibilitychange', onVis)
   ctx.lifecycle.add(() => {
     if (timer) clearInterval(timer)
@@ -474,11 +530,15 @@ function mountSettings(root, ctx) {
   wrap.className = 'hls'
   wrap.innerHTML = `
     <h2>HALOFLUX AI LINK · 设置</h2>
+    <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台</label>
+    <label>舞台帧率
+      <select id="hls-fps"><option value="30">30 FPS（省电）</option><option value="60">60 FPS（更顺滑）</option></select>
+    </label>
     <label><input type="checkbox" id="hls-compact"> 紧凑布局（面板更矮）</label>
     <div><button id="hls-save">保存</button> <span class="muted" id="hls-msg"></span></div>
     <div class="muted">数据来源：Studio 会话与用量接口、当前账号可访问的 Profile、本机系统指标。插件只读，不读取数据库文件，不发外部网络请求。</div>
     <table>
-      <tr><td>插件</td><td>haloflux-ai-link 0.2.0</td></tr>
+      <tr><td>插件</td><td>haloflux-ai-link 0.3.0</td></tr>
       <tr><td>原作</td><td>Ryder191（HALOFLUX）</td></tr>
       <tr><td>二次开发</td><td>andychao2024</td></tr>
       <tr><td>许可</td><td>PolyForm Noncommercial 1.0.0</td></tr>
@@ -486,11 +546,21 @@ function mountSettings(root, ctx) {
   `
   root.append(wrap)
   const box = wrap.querySelector('#hls-compact')
+  const animBox = wrap.querySelector('#hls-anim')
+  const fpsSel = wrap.querySelector('#hls-fps')
   const msg = wrap.querySelector('#hls-msg')
-  ctx.rpc.call('get-settings').then((s) => { box.checked = !!(s && s.compact) }).catch(() => {})
+  ctx.rpc.call('get-settings').then((s) => {
+    box.checked = !!(s && s.compact)
+    animBox.checked = !(s && s.anim === false)
+    fpsSel.value = s && s.fps === 60 ? '60' : '30'
+  }).catch(() => { animBox.checked = true; fpsSel.value = '30' })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
-      await ctx.rpc.call('save-settings', { compact: !!box.checked })
+      await ctx.rpc.call('save-settings', {
+        compact: !!box.checked,
+        anim: !!animBox.checked,
+        fps: fpsSel.value === '60' ? 60 : 30
+      })
       msg.textContent = '已保存，重新打开看板生效'
     } catch (error) {
       msg.textContent = '保存失败：' + (error.message || error)

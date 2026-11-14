@@ -209,13 +209,13 @@ export function createStore() {
     for (const s of sess) {
       const agg = byAgent.get(s.agent) || {
         agent: s.agent, profile: s.profile, sessions: 0, tokens: 0,
-        messages: 0, lastActive: 0, model: s.model, active: false
+        messages: 0, lastActive: 0, model: s.model || null, active: false
       }
       agg.sessions += 1
       agg.tokens += (s.inputTokens || 0) + (s.outputTokens || 0) + (s.cacheRead || 0)
       agg.messages += s.messageCount || 0
       agg.lastActive = Math.max(agg.lastActive, s.lastActive || 0)
-      agg.model = agg.model || s.model
+      agg.model = agg.model || s.model || null
       agg.active = agg.active || t - (s.lastActive || 0) < ACTIVE_SEC || !!((streams.get(s.id) || {}).working)
       byAgent.set(s.agent, agg)
     }
@@ -233,7 +233,7 @@ export function createStore() {
         : (meta.lastActive && t - meta.lastActive < ACTIVE_SEC) || (ageSec !== null && ageSec < ACTIVE_SEC)
           ? 'active' : 'idle'
       const pick = st.reasoning || st.output
-      streamList.push({
+      const item = {
         agent: st.agent,
         profile: st.profile,
         sessionId: st.sessionId,
@@ -242,11 +242,14 @@ export function createStore() {
         kind: st.reasoning ? 'think' : 'text',
         state,
         working: working ? 1 : 0,
-        workKind: working ? (st.lastToolAt && now - st.lastToolAt < 15000 ? 'tool' : 'model') : undefined,
-        workSec: working && st.workStartedAt ? Math.round((now - st.workStartedAt) / 1000) : undefined,
         ageSec,
         ts: st.ts || null
-      })
+      }
+      if (working) {
+        item.workKind = st.lastToolAt && now - st.lastToolAt < 15000 ? 'tool' : 'model'
+        if (st.workStartedAt) item.workSec = Math.round((now - st.workStartedAt) / 1000)
+      }
+      streamList.push(item)
     }
     streamList.sort((a, b) =>
       (b.working || 0) - (a.working || 0) ||
