@@ -160,7 +160,7 @@ export function apply(ctx) {
         }
         flush(name === 'resumed' || samples.length === 1)
       })
-      await new Promise((resolve) => setTimeout(resolve, 180000))
+      await new Promise((resolve) => setTimeout(resolve, 20000))
       try { await handle.close() } catch (_) { /* ignore */ }
       if (dumpDir) {
         writeFileSync(join(dumpDir, 'probe-connect-auto.json'), JSON.stringify({
