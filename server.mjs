@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.0'
+const VERSION = '0.8.1'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -216,17 +216,18 @@ export function apply(ctx) {
     if (!roleCache.has(run.identity.userId)) roleOf(run).catch(() => {})
     const resolved = role && role.then ? await role : role
     const profiles = resolved === 'super_admin' ? null : [run.identity.profile || 'default']
-    // 不在 RPC 路径里等待轮询：先返回缓存，避免超过 ai-link 的 2.6 秒请求超时
-    if (now() - store.usage.fetchedAt > 60000) pollUsage(run)
-    if (now() - store.skills.fetchedAt > 60000) pollSkills(run)
-    if (now() - lastRateAt > 2500) pollRate(run)
+    // 这些请求都在 Studio 进程内，耗时通常是几十毫秒；必须 await，
+    // 否则 RPC 返回时 run.signal 中止，请求会被取消（表现为 “operation was aborted”）。
+    if (now() - store.usage.fetchedAt > 60000) await pollUsage(run)
+    if (now() - store.skills.fetchedAt > 60000) await pollSkills(run)
+    if (now() - lastRateAt > 2500) await pollRate(run)
     const snap = store.snapshot(profiles)
     if (snap.current && snap.current.model && (!snap.context || !snap.context.limit)) {
       const model = snap.current.model
       const provider = snap.current.provider || ''
       if (!contextLimitBusy.has(model)) {
         contextLimitBusy.add(model)
-        run.host.request('/api/studio/sessions/context-length', { query: { model, provider } })
+        ctx.host.request('/api/studio/sessions/context-length', { query: { model, provider } })
           .then((v) => { if (v && Number.isFinite(v.context_length)) store.setContextLimit(model, v.context_length) })
           .catch(() => {})
           .finally(() => contextLimitBusy.delete(model))
@@ -249,7 +250,7 @@ export function apply(ctx) {
     for (const s of list.slice(0, 3)) {
       if ((store.streams.get(s.id) || {}).reasoning) { backfillTried.add(s.id); continue }
       backfillTried.add(s.id)
-      run.host.sessions.messages(s.id, { limit: 8 }).then((res) => {
+      ctx.host.sessions.messages(s.id, { limit: 8 }).then((res) => {
         const msgs = Array.isArray(res && res.messages) ? res.messages : []
         for (let i = msgs.length - 1; i >= 0; i--) {
           const m = msgs[i]
