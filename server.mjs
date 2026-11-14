@@ -101,6 +101,85 @@ export function apply(ctx) {
   }
   ctx.lifecycle.add(() => dump(true))
 
+  // P0：启用后自动连一个最近会话 8 秒，验证 sessions.connect 是否能拿到
+  // reasoning.delta / message.delta（全局业务事件里目前只有 run.updated）。
+  const autoTimer = setTimeout(async () => {
+    try {
+      const listed = await ctx.host.sessions.list({ limit: 3 })
+      const list = Array.isArray(listed && listed.sessions) ? listed.sessions : []
+      const target = list[0]
+      if (!target) return
+      const types = Object.create(null)
+      const samples = []
+      let lastWrite = 0
+      const flush = (force) => {
+        const now = Date.now()
+        if (!dumpDir || (!force && now - lastWrite < 5000)) return
+        lastWrite = now
+        try {
+          writeFileSync(join(dumpDir, 'probe-connect-auto.json'), JSON.stringify({
+            at: new Date().toISOString(), sessionId: target.id, agent: target.agent,
+            types, samples
+          }, null, 2))
+        } catch (_) { /* ignore */ }
+      }
+      const handle = await ctx.host.sessions.connect(target.id, (event) => {
+        const name = String((event && event.event) || 'unknown')
+        types[name] = (types[name] || 0) + 1
+        if (samples.length < 40) {
+          const sample = {
+            event: name,
+            keys: event && typeof event === 'object' ? Object.keys(event).slice(0, 20) : [],
+            delta: typeof (event && event.delta) === 'string' ? event.delta.slice(0, 120) : undefined,
+            role: event && event.role
+          }
+          if (name === 'resumed' && event) {
+            const plans = Array.isArray(event.taskPlans) ? event.taskPlans : []
+            sample.resumed = {
+              isWorking: event.isWorking,
+              messageTotal: event.messageTotal,
+              taskPlans: plans.length,
+              taskPlanKeys: plans[0] ? Object.keys(plans[0]).slice(0, 24) : [],
+              taskPlanSample: plans[0] ? clip(plans[0], 700) : null,
+              model: event.model,
+              provider: event.provider
+            }
+          }
+          if (name.indexOf('plan') >= 0 && event) {
+            sample.plan = clip(event.task_plan || event.plan || event.data || event, 700)
+          }
+          if (name.startsWith('tool.') && event) {
+            sample.tool = {
+              name: event.name,
+              callId: event.tool_call_id,
+              args: clip(event.arguments, 200),
+              preview: clip(event.preview, 200)
+            }
+          }
+          samples.push(sample)
+        }
+        flush(name === 'resumed' || samples.length === 1)
+      })
+      await new Promise((resolve) => setTimeout(resolve, 180000))
+      try { await handle.close() } catch (_) { /* ignore */ }
+      if (dumpDir) {
+        writeFileSync(join(dumpDir, 'probe-connect-auto.json'), JSON.stringify({
+          at: new Date().toISOString(), sessionId: target.id, agent: target.agent, types, samples
+        }, null, 2))
+      }
+    } catch (error) {
+      ctx.log.warn('probe auto connect failed', String((error && error.message) || error))
+      if (dumpDir) {
+        try {
+          writeFileSync(join(dumpDir, 'probe-connect-auto.json'), JSON.stringify({
+            at: new Date().toISOString(), error: String((error && error.message) || error), code: error && error.code
+          }, null, 2))
+        } catch (_) { /* ignore */ }
+      }
+    }
+  }, 3000)
+  ctx.lifecycle.add(() => clearTimeout(autoTimer))
+
   ctx.events.on('*', (event) => {
     try {
       const type = String((event && event.type) || 'unknown')
@@ -146,8 +225,10 @@ export function apply(ctx) {
       }
     }
 
+    let sessionIds = []
     await runCall('sessions', () => run.host.sessions.list({ limit: 6 }), (value) => {
       const list = Array.isArray(value && value.sessions) ? value.sessions : []
+      sessionIds = list.map((s) => s.id).filter(Boolean).slice(0, 3)
       return {
         total: value && value.total,
         count: list.length,
@@ -156,6 +237,16 @@ export function apply(ctx) {
         sessions: list.map(slimSession)
       }
     })
+    if (sessionIds.length) {
+      await runCall('batchUsage', () => run.host.request('/api/studio/sessions/usage', { query: { ids: sessionIds.join(',') } }), (value) => ({
+        keys: value && typeof value === 'object' ? Object.keys(value) : [],
+        sample: clip(value, 900)
+      }))
+    }
+    await runCall('profiles', () => run.host.request('/api/hermes/profiles/runtime-statuses'), (value) => ({
+      keys: value && typeof value === 'object' ? Object.keys(value).slice(0, 20) : [],
+      sample: clip(value, 900)
+    }))
     await runCall('usageToday', () => run.host.request('/api/studio/usage/stats', { query: { period: 'today' } }), slimUsage)
     await runCall('usage7d', () => run.host.request('/api/studio/usage/stats', { query: { days: 7 } }), slimUsage)
     await runCall('skills', () => run.host.request('/api/hermes/skills/usage/stats'), (value) => ({
@@ -172,6 +263,43 @@ export function apply(ctx) {
       if (dumpDir) writeFileSync(join(dumpDir, 'probe-api.json'), JSON.stringify(out, null, 2))
     } catch (error) {
       ctx.log.warn('probe api dump failed', String((error && error.message) || error))
+    }
+    return out
+  })
+
+  registerRpc(ctx, contract, 'probe-connect', async (input, run) => {
+    const sessionId = String(input.sessionId)
+    const waitMs = Math.min(30000, Math.max(1000, Number(input.waitMs) || 6000))
+    const types = Object.create(null)
+    const samples = []
+    let handle = null
+    try {
+      handle = await run.host.sessions.connect(sessionId, (event) => {
+        try {
+          const name = String((event && event.event) || 'unknown')
+          types[name] = (types[name] || 0) + 1
+          if (samples.length < 40) {
+            samples.push({
+              event: name,
+              keys: event && typeof event === 'object' ? Object.keys(event).slice(0, 20) : [],
+              delta: typeof (event && event.delta) === 'string' ? event.delta.slice(0, 120) : undefined,
+              role: event && event.role,
+              timestamp: event && event.timestamp
+            })
+          }
+        } catch (_) { /* ignore */ }
+      })
+      await new Promise((resolve) => setTimeout(resolve, waitMs))
+    } finally {
+      if (handle && typeof handle.close === 'function') {
+        try { await handle.close() } catch (_) { /* ignore */ }
+      }
+    }
+    const out = { sessionId, waitMs, types, samples }
+    try {
+      if (dumpDir) writeFileSync(join(dumpDir, 'probe-connect.json'), JSON.stringify(out, null, 2))
+    } catch (error) {
+      ctx.log.warn('probe connect dump failed', String((error && error.message) || error))
     }
     return out
   })

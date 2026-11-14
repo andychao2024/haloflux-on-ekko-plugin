@@ -19,6 +19,23 @@
       "properties": {},
       "required": [],
       "additionalProperties": true
+    },
+    "connectProbe": {
+      "type": "object",
+      "description": "单个会话的实时事件探测。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    },
+    "sessionInput": {
+      "type": "object",
+      "description": "要观察的会话 ID。",
+      "properties": {
+        "sessionId": { "type": "string", "description": "宿主会话 ID。", "minLength": 1, "maxLength": 200 },
+        "waitMs": { "type": "integer", "description": "观察时长，毫秒，1000-30000。", "minimum": 1000, "maximum": 30000 }
+      },
+      "required": ["sessionId"],
+      "additionalProperties": false
     }
   },
   "rpc": {
@@ -36,6 +53,11 @@
       "description": "清空事件缓冲。",
       "input": "empty",
       "output": "empty"
+    },
+    "probe-connect": {
+      "description": "连接指定会话，采样一段时间内的实时事件类型。",
+      "input": "sessionInput",
+      "output": "connectProbe"
     }
   },
   "tools": {},

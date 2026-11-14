@@ -29,12 +29,14 @@ export async function mount(root, ctx) {
       <h2>HALOFLUX AI LINK · P0 探测</h2>
       <span class="hp-muted" id="hp-meta">加载中…</span>
       <button id="hp-refresh">立即刷新</button>
+      <button id="hp-connect">连接最新会话 6 秒</button>
       <button id="hp-reset">清空事件</button>
     </div>
     <div class="hp-counts" id="hp-counts"></div>
     <div class="hp-grid">
       <div class="hp-card"><span class="hp-muted">宿主接口（sessions / usage / skills / tasks）</span><pre id="hp-api">—</pre></div>
       <div class="hp-card"><span class="hp-muted">最近业务事件（每条截断 160 字符）</span><pre id="hp-events">—</pre></div>
+      <div class="hp-card"><span class="hp-muted">实时会话样本（sessions.connect 6 秒）</span><pre id="hp-conn">尚未采样</pre></div>
     </div>
   `
   root.append(wrap)
@@ -42,8 +44,11 @@ export async function mount(root, ctx) {
   const $ = (id) => wrap.querySelector('#' + id)
   const apiEl = $('hp-api')
   const evEl = $('hp-events')
+  const connEl = $('hp-conn')
   const countsEl = $('hp-counts')
   const metaEl = $('hp-meta')
+  let lastSessionId = null
+  let connectTried = false
 
   let timer = null
   let busy = false
@@ -57,6 +62,11 @@ export async function mount(root, ctx) {
         ctx.rpc.call('probe-events')
       ])
       apiEl.textContent = JSON.stringify(api, null, 2)
+      try {
+        const list = api.calls && api.calls.sessions && api.calls.sessions.value
+          ? api.calls.sessions.value.sessions || [] : []
+        if (list.length) lastSessionId = list[0].id
+      } catch (_) { /* ignore */ }
       evEl.textContent = JSON.stringify(ev.recent, null, 2)
       countsEl.innerHTML = ''
       const entries = Object.entries(ev.counts || {}).sort((a, b) => b[1] - a[1])
@@ -75,12 +85,31 @@ export async function mount(root, ctx) {
     }
   }
 
+  async function sampleConnect() {
+    if (!lastSessionId) {
+      connEl.textContent = '还没有可用会话'
+      return
+    }
+    connEl.textContent = `正在连接 ${lastSessionId} …`
+    try {
+      const result = await ctx.rpc.call('probe-connect', { sessionId: lastSessionId, waitMs: 6000 })
+      connEl.textContent = JSON.stringify(result, null, 2)
+    } catch (error) {
+      connEl.textContent = '连接失败：' + (error && error.message ? error.message : String(error))
+    }
+  }
+
   $('hp-refresh').onclick = refresh
+  $('hp-connect').onclick = sampleConnect
   $('hp-reset').onclick = async () => {
     try { await ctx.rpc.call('probe-reset'); await refresh() } catch (error) { ctx.ui.notify(error.message || String(error), 'error') }
   }
 
   await refresh()
+  if (!connectTried && lastSessionId) {
+    connectTried = true
+    setTimeout(sampleConnect, 600)
+  }
   timer = setInterval(() => {
     if (document.visibilityState === 'visible') refresh()
   }, 3000)
