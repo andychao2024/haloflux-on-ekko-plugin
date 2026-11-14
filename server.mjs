@@ -4,9 +4,10 @@ import { assertContracts, registerRpc } from './sdk/harness/contracts.mjs'
 import { createStore } from './src/store.mjs'
 import { createMetrics } from './src/metrics.mjs'
 import { createConnections } from './src/conn.mjs'
+import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.3.0'
+const VERSION = '0.4.0'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -224,18 +225,24 @@ export function apply(ctx) {
     return snap
   })
 
+  registerRpc(ctx, contract, 'stats', async (_input, run) => {
+    lastViewerAt = now()
+    const role = await roleOf(run)
+    const profiles = role === 'super_admin' ? null : [run.identity.profile || 'default']
+    const snap = store.snapshot(profiles)
+    if (viewerActive(15000) && now() - store.usage.fetchedAt > 60000) pollUsage()
+    if (viewerActive(15000) && now() - store.skills.fetchedAt > 60000) pollSkills()
+    if (!lastRate.at) pollRate()
+    return buildLegacyStats(snap, metrics.state, VERSION)
+  })
+
   registerRpc(ctx, contract, 'get-settings', async (_input, run) => {
     const saved = (await run.state.user.namespace('haloflux').get('settings')) || {}
-    return {
-      compact: !!saved.compact,
-      anim: saved.anim !== false,
-      fps: saved.fps === 60 ? 60 : 30
-    }
+    return { anim: saved.anim !== false, fps: saved.fps === 60 ? 60 : 30 }
   })
 
   registerRpc(ctx, contract, 'save-settings', async (input, run) => {
     await run.state.user.namespace('haloflux').set('settings', {
-      compact: !!input.compact,
       anim: input.anim !== false,
       fps: input.fps === 60 ? 60 : 30
     })

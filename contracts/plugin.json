@@ -17,19 +17,48 @@
       "type": "object",
       "description": "当前用户的显示设置。",
       "properties": {
-        "compact": { "type": "boolean", "description": "紧凑布局；默认 false。" },
-        "anim": { "type": "boolean", "description": "显示原版动效舞台；默认 true。" },
-        "fps": { "type": "integer", "description": "舞台帧率上限：30 或 60；默认 30。", "enum": [30, 60] }
+        "anim": {
+          "type": "boolean",
+          "description": "显示原版动效舞台；默认 true。"
+        },
+        "fps": {
+          "type": "integer",
+          "description": "舞台帧率上限：30 或 60；默认 30。",
+          "enum": [
+            30,
+            60
+          ]
+        }
       },
-      "required": ["compact", "anim", "fps"],
+      "required": [
+        "anim",
+        "fps"
+      ],
       "additionalProperties": false
     },
     "saved": {
       "type": "object",
       "description": "设置已持久化。",
-      "properties": { "ok": { "type": "boolean", "description": "成功时为 true。", "enum": [true] } },
-      "required": ["ok"],
+      "properties": {
+        "ok": {
+          "type": "boolean",
+          "description": "成功时为 true。",
+          "enum": [
+            true
+          ]
+        }
+      },
+      "required": [
+        "ok"
+      ],
       "additionalProperties": false
+    },
+    "stats": {
+      "type": "object",
+      "description": "docker 版 /stats 兼容结构，供原版 ai-link.js 渲染。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
     }
   },
   "rpc": {
@@ -47,6 +76,11 @@
       "description": "保存当前用户的显示设置。",
       "input": "settings",
       "output": "saved"
+    },
+    "stats": {
+      "description": "返回 /stats 兼容快照。",
+      "input": "empty",
+      "output": "stats"
     }
   },
   "tools": {},
