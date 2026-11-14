@@ -151,14 +151,14 @@ const control = `
 })();
 `
 
-/* 移除页面自带的 BGM 模块（整个 <script> 块）。 */
+/* 只移除 BGM IIFE，保留同一个 <script> 里在它之前的舞台/画布引擎代码。 */
 function stripBgmScript(text) {
   const start = text.indexOf('(function initBGM() {')
   if (start < 0) throw new Error('未找到页面 BGM 模块')
-  const open = text.lastIndexOf('<script>', start)
-  const end = text.indexOf('</script>', text.indexOf('window.__bgm = {', start))
-  if (open < 0 || end < 0) throw new Error('BGM 模块结构已变')
-  return text.slice(0, open) + text.slice(end + '</script>'.length)
+  const marker = text.indexOf('window.__bgm = {', start)
+  const end = marker < 0 ? -1 : text.indexOf('})();', marker)
+  if (end < 0) throw new Error('BGM 模块结构已变')
+  return text.slice(0, start) + text.slice(end + '})();'.length)
 }
 
 let out = html

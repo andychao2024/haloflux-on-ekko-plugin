@@ -349,7 +349,7 @@ function mountSettings(root, ctx) {
     <div><button id="hls-save">保存</button> <span class="muted" id="hls-msg"></span></div>
     <div class="muted">页面与动效来自 HALOFLUX 原作；数据来自 Studio 会话/用量接口与本机指标。插件只读，不读取数据库文件，不发外部网络请求。</div>
     <table>
-      <tr><td>插件</td><td>haloflux-ai-link ${ctx.plugin && ctx.plugin.version ? ctx.plugin.version : ''}</td></tr>
+      <tr><td>插件</td><td>HALOFLUX ON Ekko ${ctx.plugin && ctx.plugin.version ? ctx.plugin.version : ''}</td></tr>
       <tr><td>原作</td><td>Ryder191（HALOFLUX）</td></tr>
       <tr><td>二次开发</td><td>andychao2024</td></tr>
       <tr><td>数据对接思路</td><td>参考 yeshuiwushen/haloflux-ai-link</td></tr>
