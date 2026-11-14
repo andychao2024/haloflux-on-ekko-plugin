@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { assertContracts, registerRpc } from './sdk/harness/contracts.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
@@ -80,12 +81,34 @@ function slimUsage(value) {
 /** @param {import('@ekko-studio/plugin-sdk').PluginContext} ctx */
 export function apply(ctx) {
   startedAt = Date.now()
+  const dumpDir = ctx.paths && ctx.paths.dataDir ? ctx.paths.dataDir : null
+  let lastDump = 0
+  let dirty = false
+  const dump = (force) => {
+    if (!dumpDir) return
+    const now = Date.now()
+    if (!force && (!dirty || now - lastDump < 5000)) return
+    try {
+      mkdirSync(dumpDir, { recursive: true })
+      writeFileSync(join(dumpDir, 'events.json'), JSON.stringify({
+        startedAt, now, counts, recent: events.slice(-80)
+      }, null, 2))
+      lastDump = now
+      dirty = false
+    } catch (error) {
+      ctx.log.warn('probe dump failed', String((error && error.message) || error))
+    }
+  }
+  ctx.lifecycle.add(() => dump(true))
+
   ctx.events.on('*', (event) => {
     try {
       const type = String((event && event.type) || 'unknown')
       counts[type] = (counts[type] || 0) + 1
       events.push(summarizeEvent(event))
       while (events.length > MAX_EVENTS) events.shift()
+      dirty = true
+      dump(false)
     } catch (error) {
       ctx.log.warn('probe event failed', String((error && error.message) || error))
     }
@@ -145,6 +168,11 @@ export function apply(ctx) {
       keys: value && value.tasks && value.tasks[0] ? Object.keys(value.tasks[0]) : [],
       sample: value && Array.isArray(value.tasks) ? value.tasks.slice(0, 2) : null
     }))
+    try {
+      if (dumpDir) writeFileSync(join(dumpDir, 'probe-api.json'), JSON.stringify(out, null, 2))
+    } catch (error) {
+      ctx.log.warn('probe api dump failed', String((error && error.message) || error))
+    }
     return out
   })
 
