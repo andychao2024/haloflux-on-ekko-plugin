@@ -63,7 +63,7 @@ const shim = `
           window.__hlCompat = true;
           Object.defineProperty(window, 'devicePixelRatio', { get: function () { return 1; }, configurable: true });
           var st = document.createElement('style');
-          st.textContent = '*,*::before,*::after{will-change:auto !important}canvas{image-rendering:auto}';
+          st.textContent = '*,*::before,*::after{will-change:auto !important;animation:none !important;transition:none !important}canvas{image-rendering:auto}';
           document.head.appendChild(st);
           window.dispatchEvent(new Event('resize'));
         }
@@ -141,6 +141,7 @@ out = out.replace('</head>', `<style>
 @media (max-height:540px){ .stage{height:40vh !important} }
 /* 插件内关闭全屏柔光/扫光与 HUD 数值闪烁，避免刷新时整页闪一下；
    舞台本身、面板、状态片不受影响。 */
+html,body{background:#05070a !important}
 #aix-fx{display:none !important}
 #aix-hud .aix-v.aix-on{animation:none !important}
 </style></head>`)

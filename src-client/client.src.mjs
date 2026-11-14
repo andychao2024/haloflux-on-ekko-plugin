@@ -17,7 +17,7 @@ export async function mount(root, ctx) {
 
   const style = document.createElement('style')
   style.textContent = `
-    .hl-root { position:relative; height:100vh; width:100%; overflow:hidden; background:#05070a; }
+    .hl-root { position:fixed; inset:0; height:auto; width:auto; overflow:hidden; background:#05070a; z-index:0; }
     .hl-link { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
       gap:14px; padding:28px; color:#cfd3db; font:13px/1.6 ui-monospace,Consolas,monospace; text-align:center;
       background:radial-gradient(circle at 50% 30%, #10161a, #05070a 70%); }
@@ -55,8 +55,8 @@ export async function mount(root, ctx) {
     return
   }
 
-  // 直接把原版页面注入当前文档：不再套一层子 iframe（Big Sur / 手机上
-  // 嵌套 iframe 与 canvas 合成容易整页闪烁），同时页面拿到完整的 100vh。
+  // 把原版页面挂到插件提供的 root 节点里（不要替换 document.body：
+  // Studio 的插件宿主需要保留自己的根节点，替换会触发宿主重排/重挂载）。
   const parsed = new DOMParser().parseFromString(PAGE_HTML, 'text/html')
   const scripts = [...parsed.body.querySelectorAll('script')].map((el) => el.textContent)
   parsed.body.querySelectorAll('script').forEach((el) => el.remove())
@@ -67,14 +67,9 @@ export async function mount(root, ctx) {
     document.head.appendChild(clone)
     injected.push(clone)
   }
-  if (parsed.title) document.title = parsed.title
-  document.documentElement.lang = parsed.documentElement.lang || 'zh-CN'
-  document.documentElement.className = parsed.documentElement.className || ''
 
-  root.classList.remove('hl-root')
-  root.innerHTML = ''
-  document.body.className = parsed.body.className || ''
-  document.body.innerHTML = parsed.body.innerHTML
+  root.classList.add('hl-root')
+  root.innerHTML = parsed.body.innerHTML
 
   let statsBusy = false
   window.__hlBridge = {
@@ -96,7 +91,7 @@ export async function mount(root, ctx) {
   for (const code of scripts) {
     const el = document.createElement('script')
     el.textContent = code
-    document.body.appendChild(el)
+    root.appendChild(el)
   }
 
   if (typeof window.__hlApplySettings === 'function') {
@@ -105,7 +100,8 @@ export async function mount(root, ctx) {
 
   ctx.lifecycle.add(() => {
     for (const node of injected) node.remove()
-    try { document.body.innerHTML = '' } catch (_) { /* ignore */ }
+    try { root.innerHTML = '' } catch (_) { /* ignore */ }
+    root.classList.remove('hl-root')
   })
 }
 
