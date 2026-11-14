@@ -25,7 +25,6 @@ export function createConnections({ host, store, log, max = 8 }) {
           log.warn('session event failed', String((error && error.message) || error))
         }
       })
-      log.info('connected session', { sessionId, agent: meta.agent })
     } catch (error) {
       handles.delete(sessionId)
       log.warn('session connect failed', { sessionId, error: String((error && error.message) || error) })
