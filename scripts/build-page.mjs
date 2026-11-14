@@ -139,6 +139,22 @@ out = out.replace('</head>', `<style>
 @media (max-height:780px){ .stage{height:54vh !important} }
 @media (max-height:640px){ .stage{height:47vh !important} }
 @media (max-height:540px){ .stage{height:40vh !important} }
+/* 窄屏（手机/Studio 侧栏展开）：避免横向滚动，压缩页头与 HUD */
+@media (max-width: 640px) {
+  html, body { overflow-x: hidden !important; }
+  .app { width: 100% !important; overflow-x: hidden !important; }
+  header { grid-template-columns: minmax(0,1fr) repeat(2, minmax(0,1fr)) !important;
+           gap: 4px 8px !important; padding: 8px 10px 0 !important; }
+  header .brand h1 { font-size: 13px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header .brand p { display: none !important; }
+  header .kpi:nth-child(n+4) { display: none !important; }
+  header .kpi .k { font-size: 8px !important; letter-spacing: .5px; }
+  header .kpi .v { font-size: 15px !important; }
+  #stageWrap { height: 46vh !important; }
+  .panels { padding: 6px 8px 10px !important; gap: 6px !important; }
+  .panels .p { padding: 6px 8px !important; }
+  #aix-hud { width: min(72vw, 232px) !important; right: 8px !important; top: 58px !important; }
+}
 /* 插件内关闭全屏柔光/扫光与 HUD 数值闪烁，避免刷新时整页闪一下；
    舞台本身、面板、状态片不受影响。 */
 html,body{background:#05070a !important}

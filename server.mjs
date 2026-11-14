@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.7.1'
+const VERSION = '0.7.2'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
