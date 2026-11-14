@@ -60,6 +60,17 @@ function parseNetdev(text) {
   return { rx, tx }
 }
 
+/** 每核负载：基于两次采样的增量，没有上一次采样时先返回 0。 */
+export function perCoreUsage(curCores, prevCores) {
+  return curCores.map((c, i) => {
+    const prev = prevCores && prevCores[i]
+    if (!prev) return 0
+    const dt = c.total - prev.total
+    const di = c.idle - prev.idle
+    return dt > 0 ? round(clamp((1 - di / dt) * 100, 0, 100)) : 0
+  })
+}
+
 export function createMetrics() {
   const state = {
     cpu: null,
@@ -73,6 +84,7 @@ export function createMetrics() {
     uptimeSec: Math.round(os.uptime())
   }
   let prevCpu = null
+  let prevCores = null
   let prevDisk = null
   let prevNet = null
 
@@ -86,12 +98,15 @@ export function createMetrics() {
       if (dt > 0) state.cpu = round(clamp((1 - di / dt) * 100, 0, 100))
     }
     prevCpu = cur
+    // 每核必须用两次采样的增量，不能拿开机以来的累计值：
+    // 累计值会收敛成一条几乎不动的直线，面板上的黄色柱看起来就像卡住了。
     const cores = os.cpus()
-    state.cpuCores = cores.map((c) => {
+    const curCores = cores.map((c) => {
       const t = c.times
-      const total = t.user + t.nice + t.sys + t.idle + t.irq
-      return total ? Math.round(((total - t.idle) / total) * 100) : 0
+      return { idle: t.idle, total: t.user + t.nice + t.sys + t.idle + t.irq }
     })
+    state.cpuCores = perCoreUsage(curCores, prevCores)
+    prevCores = curCores
 
     const totalMem = os.totalmem()
     const freeMem = os.freemem()
