@@ -36,24 +36,53 @@ export async function mount(root, ctx) {
   root.classList.add('hl-root')
 
   if (display === 'link') {
-    const path = (ctx.location && ctx.location.path) || '/studio/plugins/haloflux-ai-link/dashboard'
-    const target = location.origin + '/#' + path
     const box = document.createElement('div')
     box.className = 'hl-link'
     box.innerHTML = `<b>HALOFLUX AI LINK</b>
-      <div>当前设置为「新链接模式」：在新标签页打开插件自己的看板。</div>
-      <code>${target.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</code>
-      <button id="hl-open">在新标签页打开</button>
-      <button id="hl-copy">复制地址</button>
-      <div style="color:#6f747c;font-size:11px">数据仍来自当前 Studio 账号，不使用 docker 服务，也不需要令牌。</div>`
+      <div>新链接模式：在独立窗口打开看板，不受 Studio 页面重绘影响。</div>
+      <button id="hl-open">在新窗口打开</button>
+      <div style="color:#6f747c;font-size:11px">数据由当前 Studio 插件后端提供，不使用 docker，也不需要令牌。关闭 Studio 页面后数据会停止更新。</div>`
     root.append(box)
-    const open = () => { window.open(target, '_blank', 'noopener,noreferrer') }
-    box.querySelector('#hl-open').onclick = open
-    box.querySelector('#hl-copy').onclick = async () => {
-      try { await navigator.clipboard.writeText(target); ctx.ui.notify('地址已复制', 'success') }
-      catch (_) { ctx.ui.notify('复制失败，请手动选择地址', 'error') }
+
+    const bridgeScript = `<script>(function(){
+      var seq=0, pending={};
+      window.addEventListener('message', function (event) {
+        var m = event.data || {};
+        if (m.__hl === 'stats-result' && pending[m.id]) { pending[m.id](m.data); delete pending[m.id]; }
+      });
+      window.__hlBridge = { stats: function () {
+        return new Promise(function (resolve) {
+          var id = ++seq; pending[id] = resolve;
+          try { window.opener.postMessage({ __hl: 'stats-request', id: id }, '*'); } catch (e) { resolve(null); }
+          setTimeout(function () { if (pending[id]) { delete pending[id]; resolve(null); } }, 4000);
+        });
+      } };
+    })()</script>`
+
+    const open = () => {
+      const win = window.open('', '_blank')
+      if (!win) { ctx.ui.notify('浏览器拦截了新窗口，请允许弹窗后重试', 'error'); return }
+      const html = PAGE_HTML.replace('<head>', '<head>' + bridgeScript)
+      win.document.open()
+      win.document.write(html)
+      win.document.close()
+      setTimeout(() => { try { win.postMessage({ __hl: 'settings', value: { anim, compat } }, '*') } catch (_) {} }, 500)
     }
-    ctx.lifecycle.add(() => { box.remove(); root.classList.remove('hl-root') })
+    box.querySelector('#hl-open').onclick = open
+
+    async function onChildStats(event) {
+      const message = event.data || {}
+      if (message.__hl !== 'stats-request') return
+      let data = null
+      try { data = await ctx.rpc.call('stats') } catch (_) { data = null }
+      try { event.source.postMessage({ __hl: 'stats-result', id: message.id, data }, '*') } catch (_) {}
+    }
+    window.addEventListener('message', onChildStats)
+    ctx.lifecycle.add(() => {
+      window.removeEventListener('message', onChildStats)
+      box.remove()
+      root.classList.remove('hl-root')
+    })
     return
   }
 
