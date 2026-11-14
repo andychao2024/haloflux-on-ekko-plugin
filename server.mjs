@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.6.0'
+const VERSION = '0.6.1'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -34,8 +34,6 @@ export function apply(ctx) {
   let lastUsageTry = 0
   let lastSkillTry = 0
   let lastRateTry = 0
-  let lastRate = { total: 0, input: 0, output: 0, cacheRead: 0, at: 0 }
-  const rateHistory = []
   const roleCache = new Map()
 
   let lastSnapshotDump = 0
@@ -87,6 +85,10 @@ export function apply(ctx) {
     }
   }
 
+  const prevUsage = new Map()   // sessionId -> { tok, out }
+  const rateDeltas = []         // { at, tok, out } 最近 90 秒
+  let lastRateAt = 0
+
   async function pollRate(run) {
     if (rateBusy || !run || now() - lastRateTry < 2500) return
     lastRateTry = now()
@@ -101,35 +103,40 @@ export function apply(ctx) {
     rateBusy = true
     try {
       const data = await run.host.request('/api/studio/sessions/usage', { query: { ids: ids.join(',') } })
-      let total = 0
+      let tokDelta = 0
+      let outDelta = 0
       let input = 0
-      let output = 0
       let cacheRead = 0
       for (const id of ids) {
         const row = data && data[id]
         if (!row) continue
-        total += (row.input_tokens || 0) + (row.output_tokens || 0) + (row.cache_read_tokens || 0)
+        const tok = (row.input_tokens || 0) + (row.output_tokens || 0) + (row.cache_read_tokens || 0)
+        const out = (row.output_tokens || 0)
+        const prev = prevUsage.get(id)
+        // 只按“同一会话的累计增量”计数；会话进出统计集合不会造成总量跳变
+        if (prev) {
+          tokDelta += Math.max(0, tok - prev.tok)
+          outDelta += Math.max(0, out - prev.out)
+        }
+        prevUsage.set(id, { tok, out })
         input += row.input_tokens || 0
-        output += row.output_tokens || 0
         cacheRead += row.cache_read_tokens || 0
       }
       const at = now()
-      if (lastRate.at) {
-        const dt = (at - lastRate.at) / 1000
-        const dTotal = Math.max(0, total - lastRate.total)
-        const dOutput = Math.max(0, output - lastRate.output)
-        rateHistory.push({ at, total })
-        while (rateHistory.length > 2 && at - rateHistory[0].at > 90000) rateHistory.shift()
-        const span = (at - rateHistory[0].at) / 1000
-        const gained = total - rateHistory[0].total
-        const hit = input + cacheRead > 0 ? cacheRead / (input + cacheRead) : 0
-        store.setRate({
-          tokensPerSec: span > 1 ? round(Math.max(0, gained) / span, 1) : round(dTotal / dt, 1),
-          outputPerSec: dt > 0.5 ? round(dOutput / dt, 1) : 0,
-          cacheHit: round(hit * 100)
-        })
-      }
-      lastRate = { total, input, output, cacheRead, at }
+      rateDeltas.push({ at, tok: tokDelta, out: outDelta })
+      while (rateDeltas.length > 2 && at - rateDeltas[0].at > 90000) rateDeltas.shift()
+      let tokSum = 0
+      let outSum = 0
+      for (const item of rateDeltas) { tokSum += item.tok; outSum += item.out }
+      // 90 秒窗口；窗口不满时按实际跨度折算，避免开头数值虚高
+      const span = Math.max(5, Math.min(90, (at - rateDeltas[0].at) / 1000))
+      const hit = input + cacheRead > 0 ? cacheRead / (input + cacheRead) : 0
+      store.setRate({
+        tokensPerSec: round(tokSum / span, 1),
+        outputPerSec: round(outSum / span, 1),
+        cacheHit: round(hit * 100)
+      })
+      lastRateAt = at
     } catch (error) {
       ctx.log.warn('rate poll failed: ' + String((error && error.message) || error))
     } finally {
@@ -220,7 +227,7 @@ export function apply(ctx) {
     }
     if (now() - store.usage.fetchedAt > 60000) pollUsage(run)
     if (now() - store.skills.fetchedAt > 60000) pollSkills(run)
-    if (now() - lastRate.at > 2000) pollRate(run)
+    if (now() - lastRateAt > 2500) pollRate(run)
     writeDump('snapshot.json', snap)
     return snap
   })
@@ -231,7 +238,7 @@ export function apply(ctx) {
     const profiles = role === 'super_admin' ? null : [run.identity.profile || 'default']
     if (now() - store.usage.fetchedAt > 60000) await pollUsage(run)
     if (now() - store.skills.fetchedAt > 60000) await pollSkills(run)
-    if (now() - lastRate.at > 2000) await pollRate(run)
+    if (now() - lastRateAt > 2500) await pollRate(run)
     const snap = store.snapshot(profiles)
     return buildLegacyStats(snap, metrics.state, VERSION)
   })

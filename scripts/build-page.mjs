@@ -139,6 +139,10 @@ out = out.replace('</head>', `<style>
 @media (max-height:780px){ .stage{height:54vh !important} }
 @media (max-height:640px){ .stage{height:47vh !important} }
 @media (max-height:540px){ .stage{height:40vh !important} }
+/* 插件内关闭全屏柔光/扫光与 HUD 数值闪烁，避免刷新时整页闪一下；
+   舞台本身、面板、状态片不受影响。 */
+#aix-fx{display:none !important}
+#aix-hud .aix-v.aix-on{animation:none !important}
 </style></head>`)
 
 if (out === html) throw new Error('未找到 wp.js / ai-link.js 脚本标签，结构可能已变')
