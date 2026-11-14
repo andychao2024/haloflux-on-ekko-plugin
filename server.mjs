@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.6.2'
+const VERSION = '0.6.3'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -157,23 +157,6 @@ export function apply(ctx) {
     clearInterval(metricTimer)
     clearInterval(pruneTimer)
     conns.closeAll()
-  })
-
-  ctx.events.on('chat.*', (event) => {
-    try {
-      const data = event && event.data ? event.data : {}
-      const subject = typeof data.subject === 'string' ? JSON.parse(data.subject) : (data.subject || {})
-      const sessionId = subject.session_id
-      const type = String(event.type || '')
-      const profile = (event.identity && event.identity.profile) || 'default'
-      if (!sessionId) return
-      conns.ensure(sessionId)
-      if (type === 'chat.plan.updated' && data.task_plan) store.setPlan(sessionId, data.task_plan)
-      if (type === 'chat.run.completed' || type === 'chat.run.failed' || type === 'chat.run.stopped') {
-        store.setWorking(sessionId, false)
-      }
-      store.addEvent({ type: type.replace('chat.', ''), profile, agent: (store.streamFor(sessionId) || {}).agent, text: (data.summary && data.summary.status) || '' })
-    } catch (_) { /* ignore */ }
   })
 
   pollSessions()
