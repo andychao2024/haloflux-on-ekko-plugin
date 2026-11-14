@@ -21,14 +21,6 @@
           "type": "boolean",
           "description": "显示原版动效舞台；默认 true。"
         },
-        "fps": {
-          "type": "integer",
-          "description": "舞台帧率上限：30 或 60；默认 30。",
-          "enum": [
-            30,
-            60
-          ]
-        },
         "display": {
           "type": "string",
           "description": "显示方式：iframe 内嵌，或 link 新链接。",
@@ -49,7 +41,6 @@
       },
       "required": [
         "anim",
-        "fps",
         "display",
         "url",
         "compat"

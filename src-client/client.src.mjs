@@ -12,14 +12,13 @@ export async function mount(root, ctx) {
 
   const settings = await ctx.rpc.call('get-settings').catch(() => ({ anim: true, fps: 30, display: 'iframe', url: '' }))
   const anim = !(settings && settings.anim === false)
-  const fps = settings && settings.fps === 60 ? 60 : 30
   const display = settings && settings.display === 'link' ? 'link' : 'iframe'
   const url = (settings && typeof settings.url === 'string') ? settings.url.trim() : ''
   const compat = !!(settings && settings.compat)
 
   const style = document.createElement('style')
   style.textContent = `
-    .hl-root { position:fixed; inset:0; height:auto; width:auto; overflow:hidden; background:#05070a; z-index:0; }
+    .hl-root { position:relative; height:100vh; width:100%; overflow:hidden; background:#05070a; }
     .hl-link { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
       gap:14px; padding:28px; color:#cfd3db; font:13px/1.6 ui-monospace,Consolas,monospace; text-align:center;
       background:radial-gradient(circle at 50% 30%, #10161a, #05070a 70%); }
@@ -62,7 +61,7 @@ export async function mount(root, ctx) {
   }
 
   function pushSettings() {
-    post({ __hl: 'settings', value: { anim, fps, compat } })
+    post({ __hl: 'settings', value: { anim, compat } })
   }
 
   async function onMessage(event) {
@@ -116,12 +115,6 @@ function mountSettings(root, ctx) {
     </label>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式）</label>
     <label><input type="checkbox" id="hls-compat"> 兼容模式（Big Sur / 旧显卡：DPR=1，关闭 will-change）</label>
-    <label>舞台帧率
-      <select id="hls-fps">
-        <option value="30">30 FPS（省电）</option>
-        <option value="60">60 FPS（更顺滑）</option>
-      </select>
-    </label>
     <div><button id="hls-save">保存</button> <span class="muted" id="hls-msg"></span></div>
     <div class="muted">页面与动效来自 HALOFLUX 原作；数据来自 Studio 会话/用量接口与本机指标。插件只读，不读取数据库文件，不发外部网络请求。</div>
     <table>
@@ -133,23 +126,20 @@ function mountSettings(root, ctx) {
   `
   root.append(wrap)
   const animBox = wrap.querySelector('#hls-anim')
-  const fpsSel = wrap.querySelector('#hls-fps')
   const displaySel = wrap.querySelector('#hls-display')
   const urlInput = wrap.querySelector('#hls-url')
   const compatBox = wrap.querySelector('#hls-compat')
   const msg = wrap.querySelector('#hls-msg')
   ctx.rpc.call('get-settings').then((s) => {
     animBox.checked = !(s && s.anim === false)
-    fpsSel.value = s && s.fps === 60 ? '60' : '30'
     displaySel.value = s && s.display === 'link' ? 'link' : 'iframe'
     urlInput.value = (s && s.url) || ''
     compatBox.checked = !!(s && s.compat)
-  }).catch(() => { animBox.checked = true; fpsSel.value = '30'; displaySel.value = 'iframe' })
+  }).catch(() => { animBox.checked = true; displaySel.value = 'iframe' })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
       await ctx.rpc.call('save-settings', {
         anim: !!animBox.checked,
-        fps: fpsSel.value === '60' ? 60 : 30,
         display: displaySel.value === 'link' ? 'link' : 'iframe',
         url: urlInput.value.trim(),
         compat: !!compatBox.checked

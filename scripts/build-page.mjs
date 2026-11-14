@@ -116,27 +116,9 @@ const shim = `
 `
 
 const control = `
-/* ---- 舞台控制：帧率上限 / 暂停 / setParam 桥（不改 ai-link.js） ---- */
+/* ---- 舞台控制：暂停与 setParam 桥（不改 ai-link.js 的帧率） ---- */
 (function () {
-  var nativeRaf = window.requestAnimationFrame.bind(window);
-  var ids = new Map(), seq = 0, targetFps = 30, lastTs = 0;
-  window.requestAnimationFrame = function (cb) {
-    var id = ++seq; ids.set(id, cb); return id;
-  };
-  window.cancelAnimationFrame = function (id) { ids.delete(id); };
-  function pump(ts) {
-    nativeRaf(pump);
-    if (!ids.size) return;
-    if (lastTs && ts - lastTs < 1000 / targetFps - 1) return;
-    lastTs = ts;
-    var batch = Array.from(ids.entries());
-    ids.clear();
-    for (var i = 0; i < batch.length; i++) {
-      try { batch[i][1](ts); } catch (e) { console.error('[stage] frame', e); }
-    }
-  }
-  nativeRaf(pump);
-  window.__stageSetFps = function (fps) { targetFps = fps >= 55 ? 60 : 30; lastTs = 0; };
+  window.__stageSetFps = function () { /* 原版帧率，不做限帧 */ };
   window.__stagePause = function (paused) { window.__wpPaused = !!paused; };
   window.__stageParam = function (name, value) {
     if (typeof window.setParam === 'function') { try { window.setParam(name, value, true); } catch (e) {} }
