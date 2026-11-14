@@ -21,14 +21,6 @@
           "type": "boolean",
           "description": "显示原版动效舞台；默认 true。"
         },
-        "display": {
-          "type": "string",
-          "description": "显示方式：iframe 内嵌，或 link 新链接。",
-          "enum": [
-            "iframe",
-            "link"
-          ]
-        },
         "compat": {
           "type": "boolean",
           "description": "兼容模式：DPR 固定 1、禁用 will-change，缓解旧显卡闪烁；默认 false。"
@@ -45,7 +37,6 @@
       },
       "required": [
         "anim",
-        "display",
         "compat",
         "title",
         "music"

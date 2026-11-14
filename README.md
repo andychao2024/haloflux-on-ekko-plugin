@@ -1,30 +1,57 @@
-# Studio 独立插件
+# HALOFLUX AI LINK · Studio 插件
 
-本项目由 ekko-studio plugins create 创建，随附当前 Studio 的开发说明：
+把 [HALOFLUX](https://github.com/Ryder191/haloflux) 的动效看板接入 Ekko Studio：
+原版舞台（圆环 / 光束 / 扫描线）+ HUD + 8 个数据面板，数据全部来自 Studio 公开接口。
 
-- [架构](docs/ARCHITECTURE.md)：包格式、加载、页面隔离、RPC 与 Agent 运行。
-- [ctx 能力](docs/STUDIO_CTX.md)：后端、前端、普通运行及 Agent 上下文。
-- [回传约定](docs/STUDIO_RETURNS.md)：各回调的返回结构、事件和最终结果。
-- [字段手册](docs/FIELD_REFERENCE.md)：必填、可空、默认值、单位、权限、大小限制和兼容行为。
-- [宿主业务参数](docs/HOST_API.md)：八个 host 模块的方法输入、返回包装及业务并发约束。
-- [开发规范](docs/DEVELOPMENT.md)：文档维护、测试与发布。
-- [插件数据说明](docs/CONTRACTS.md)：本项目的输入输出、存储及兼容行为。
-- [SDK 类型](sdk/src/index.ts) 与 [Agent 类型](sdk/src/agents.ts)：精确字段和签名。
+## 功能
+
+- 原版 canvas 舞台与动效，按令牌吞吐驱动圆环转速、节拍与脉冲
+- HUD：会话、模型、今日用量、速率、命中率、工具、消息、CPU、硬盘、运行时长、技能、7 日趋势
+- 8 个面板：事件流 / 吞吐 / 思考过程 / CPU-磁盘 / 任务计划 / 工具 / 代理调度 / 系统负载
+- 状态片：最少 3、最多 5、6 秒轮换、点击锁定
+- 设置：看板标题、动效开关、兼容模式、背景音乐
+- 跟随 Studio 主题容器、桌面与手机自适应
+
+## 数据来源
+
+不读取 Studio 数据库、transcript 或 token，全部走 SDK：
+
+| 数据 | 来源 |
+|---|---|
+| 会话 / Agent / 模型 / Provider / 消息数 | `ctx.host.sessions.list` |
+| 今日用量、7 日趋势 | `ctx.host.request('/api/studio/usage/stats')` |
+| 速率、缓存命中、上下文 | `ctx.host.request('/api/studio/sessions/usage')`、`/sessions/context-length` |
+| 实时思考 / 工具 / 任务计划 | 页面端 `ctx.host.sessions.connect` |
+| 历史思考回看 | 页面端 `ctx.host.sessions.messages`（最近 3 个会话） |
+| 技能 | `ctx.host.request('/api/hermes/skills/usage/stats')` |
+| CPU / 内存 / 磁盘 / 网络 / GPU | 插件后端的 Node `os`、`/proc`、Mali sysfs |
+
+实时连接使用**查看者自己的身份**建立，服务端不使用管理员身份代读会话。权限仅 `api.read` + `ui`。
+
+## 已知限制
+
+- 历史工具总数：公开接口没有聚合值，只保留最近 8 条与插件运行期间计数
+- 技能“使用中”：接口只有 7 日聚合，没有单次调用时间
+- 思考回看：只补最近 3 个会话的最后一条，不做完整历史
+- 非 Linux 平台：磁盘/网络/GPU 显示 `—`
+- 归档会话不计入累计令牌与消息数
+
+## 安装
+
+Studio → 插件中心 → 安装 → 本地目录或 `github:` 地址，启用后从左侧导航打开
+「HALOFLUX AI LINK」。
+
+开发：
 
 ```bash
-npm install                 # 本地 SDK 类型依赖；harness 本身无需安装依赖
+npm run build          # 从 docker 版 index.html 生成页面并打包 client.mjs
 npm run harness:check
 npm test
-npm run dev
 ```
 
-在 Studio → 插件中心 → 开发插件 中点击“开始调试”。宿主运行检查及可选 build，
-监听源码并重载；失败保留当前运行版本，停止调试保留安装副本和数据。
-此 .mjs 模板无需编译。TypeScript/UI 框架项目自行配置 build，并将清单入口指向编译产物。
+## 归属与许可
 
-文档是普通 Markdown，直接编辑并与代码一起提交。本插件的数据结构定义在 contracts/plugin.json，
-变化时同步修改字段描述、docs/CONTRACTS.md 的相关说明及行为测试，无需文档生成步骤。
-Studio 提供的指南由 Studio 主仓库维护；升级 SDK 时一起更新这些指南。
-
-示例有 get-settings/save-settings 两个 RPC，按真实用户与 Profile 保存 greeting/compact。
-输入、输出、存储都通过同一份契约校验。
+- 原作：Ryder191（HALOFLUX），界面、舞台与视觉设计版权归原作者
+- Studio 插件二次开发：andychao2024
+- **数据对接思路参考**：[yeshuiwushen/haloflux-ai-link](https://github.com/yeshuiwushen/haloflux-ai-link)
+- 许可：PolyForm Noncommercial 1.0.0（仅限非商业用途，保留原作 Required Notice）

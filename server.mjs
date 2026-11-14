@@ -6,7 +6,7 @@ import { createMetrics } from './src/metrics.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.9.0'
+const VERSION = '0.9.1'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -226,7 +226,6 @@ export function apply(ctx) {
     const saved = (await run.state.user.namespace('haloflux').get('settings')) || {}
     return {
       anim: saved.anim !== false,
-      display: saved.display === 'link' ? 'link' : 'iframe',
       compat: !!saved.compat,
       title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : '',
       music: !!saved.music
@@ -236,7 +235,6 @@ export function apply(ctx) {
   registerRpc(ctx, contract, 'save-settings', async (input, run) => {
     await run.state.user.namespace('haloflux').set('settings', {
       anim: input.anim !== false,
-      display: input.display === 'link' ? 'link' : 'iframe',
       compat: !!input.compat,
       title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : '',
       music: !!input.music

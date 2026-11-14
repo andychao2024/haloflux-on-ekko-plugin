@@ -79,7 +79,7 @@ export function buildLegacyStats(snap, host, version) {
       sessions: snap.sessions ? snap.sessions.total : null,
       toolCalls: num(snap.toolCount) || 0,
       messages: num((snap.totals || {}).messages) ?? agents.reduce((n, a) => n + (a.messages || 0), 0),
-      recentTools: tools.map((t) => ({
+      recentTools: tools.slice(0, 8).map((t) => ({
         agent: t.agent,
         name: t.name,
         arg: t.arg,
