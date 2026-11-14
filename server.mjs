@@ -1,313 +1,236 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { assertContracts, registerRpc } from './sdk/harness/contracts.mjs'
+import { createStore } from './src/store.mjs'
+import { createMetrics } from './src/metrics.mjs'
+import { createConnections } from './src/conn.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
+const VERSION = '0.2.0'
 
-const MAX_EVENTS = 200
-const events = []
-const counts = Object.create(null)
-let startedAt = Date.now()
+const SESSION_POLL_MS = 8000
+const USAGE_POLL_MS = 30000
+const SKILL_POLL_MS = 60000
+const RATE_POLL_MS = 2000
+const VIEWER_TTL_MS = 30000
 
-function clip(value, max) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value)
-  return text.length > max ? text.slice(0, max) + '…' : text
-}
-
-function summarizeEvent(event) {
-  const data = event && event.data && typeof event.data === 'object' ? event.data : {}
-  const delta = typeof data.delta === 'string' ? data.delta : null
-  const sample = {}
-  for (const key of Object.keys(data).slice(0, 12)) {
-    const value = data[key]
-    sample[key] = value === null || typeof value === 'number' || typeof value === 'boolean'
-      ? value
-      : clip(value, 160)
-  }
-  return {
-    at: new Date().toISOString(),
-    type: event && event.type,
-    profile: event && event.identity && event.identity.profile,
-    userId: event && event.identity && event.identity.userId,
-    deltaLen: delta ? delta.length : 0,
-    data: sample
-  }
-}
-
-function slimSession(item) {
-  const s = item && typeof item === 'object' ? item : {}
-  return {
-    id: s.id,
-    profile: s.profile,
-    source: s.source,
-    agent: s.agent,
-    agent_mode: s.agent_mode,
-    model: s.model,
-    provider: s.provider,
-    title: clip(s.title || '', 40),
-    message_count: s.message_count,
-    tool_call_count: s.tool_call_count,
-    input_tokens: s.input_tokens,
-    output_tokens: s.output_tokens,
-    cache_read_tokens: s.cache_read_tokens,
-    last_active: s.last_active,
-    is_archived: s.is_archived
-  }
-}
-
-function slimUsage(value) {
-  const v = value && typeof value === 'object' ? value : {}
-  const pick = {}
-  for (const key of [
-    'origin', 'total_input_tokens', 'total_output_tokens', 'total_cache_read_tokens',
-    'total_cache_write_tokens', 'total_reasoning_tokens', 'total_sessions',
-    'total_api_calls', 'period_days', 'account_attribution_available'
-  ]) if (key in v) pick[key] = v[key]
-  pick.filter_options = v.filter_options && typeof v.filter_options === 'object'
-    ? {
-        accounts: Array.isArray(v.filter_options.accounts) ? v.filter_options.accounts.slice(0, 6) : undefined,
-        models: Array.isArray(v.filter_options.models) ? v.filter_options.models.slice(0, 6) : undefined,
-        agents: Array.isArray(v.filter_options.agents) ? v.filter_options.agents.slice(0, 10) : undefined,
-        profiles: v.filter_options.profiles
-      }
-    : v.filter_options
-  pick.by_agent = Array.isArray(v.by_agent) ? v.by_agent.slice(0, 10) : v.by_agent
-  pick.by_model = Array.isArray(v.by_model) ? v.by_model.slice(0, 5) : v.by_model
-  pick.by_day = Array.isArray(v.by_day) ? v.by_day.slice(-3) : v.by_day
-  pick.keys = Object.keys(v).slice(0, 30)
-  return pick
+const now = () => Date.now()
+const round = (n, d = 1) => {
+  const p = 10 ** d
+  return Math.round(n * p) / p
 }
 
 /** @param {import('@ekko-studio/plugin-sdk').PluginContext} ctx */
 export function apply(ctx) {
-  startedAt = Date.now()
+  const startedAt = now()
+  const store = createStore()
+  const metrics = createMetrics()
+  const conns = createConnections({ host: ctx.host, store, log: ctx.log })
   const dumpDir = ctx.paths && ctx.paths.dataDir ? ctx.paths.dataDir : null
-  let lastDump = 0
-  let dirty = false
-  const dump = (force) => {
+  let lastViewerAt = 0
+  let usageBusy = false
+  let rateBusy = false
+  let lastRate = { total: 0, input: 0, output: 0, cacheRead: 0, at: 0 }
+  const rateHistory = []
+  const roleCache = new Map()
+
+  let lastSnapshotDump = 0
+  const writeDump = (name, value) => {
     if (!dumpDir) return
-    const now = Date.now()
-    if (!force && (!dirty || now - lastDump < 5000)) return
+    if (name === 'snapshot.json' && now() - lastSnapshotDump < 5000) return
+    if (name === 'snapshot.json') lastSnapshotDump = now()
+    try { writeFileSync(join(dumpDir, name), JSON.stringify(value, null, 2)) } catch (_) { /* ignore */ }
+  }
+
+  async function pollSessions() {
     try {
-      mkdirSync(dumpDir, { recursive: true })
-      writeFileSync(join(dumpDir, 'events.json'), JSON.stringify({
-        startedAt, now, counts, recent: events.slice(-80)
-      }, null, 2))
-      lastDump = now
-      dirty = false
+      const listed = await ctx.host.sessions.list({ limit: 200 })
+      const list = Array.isArray(listed && listed.sessions) ? listed.sessions : []
+      store.upsertSessions(list)
+      const t = Math.floor(now() / 1000)
+      for (const s of list) {
+        if (s.is_archived) continue
+        if (t - (Number(s.last_active) || 0) < 300) conns.ensure(s.id)
+      }
     } catch (error) {
-      ctx.log.warn('probe dump failed', String((error && error.message) || error))
+      ctx.log.warn('sessions poll failed', String((error && error.message) || error))
     }
   }
-  ctx.lifecycle.add(() => dump(true))
 
-  // P0：启用后自动连一个最近会话 8 秒，验证 sessions.connect 是否能拿到
-  // reasoning.delta / message.delta（全局业务事件里目前只有 run.updated）。
-  const autoTimer = setTimeout(async () => {
+  async function pollUsage() {
+    if (usageBusy) return
+    usageBusy = true
     try {
-      const listed = await ctx.host.sessions.list({ limit: 3 })
-      const list = Array.isArray(listed && listed.sessions) ? listed.sessions : []
-      const target = list[0]
-      if (!target) return
-      const types = Object.create(null)
-      const samples = []
-      let lastWrite = 0
-      const flush = (force) => {
-        const now = Date.now()
-        if (!dumpDir || (!force && now - lastWrite < 5000)) return
-        lastWrite = now
-        try {
-          writeFileSync(join(dumpDir, 'probe-connect-auto.json'), JSON.stringify({
-            at: new Date().toISOString(), sessionId: target.id, agent: target.agent,
-            types, samples
-          }, null, 2))
-        } catch (_) { /* ignore */ }
-      }
-      const handle = await ctx.host.sessions.connect(target.id, (event) => {
-        const name = String((event && event.event) || 'unknown')
-        types[name] = (types[name] || 0) + 1
-        if (samples.length < 40) {
-          const sample = {
-            event: name,
-            keys: event && typeof event === 'object' ? Object.keys(event).slice(0, 20) : [],
-            delta: typeof (event && event.delta) === 'string' ? event.delta.slice(0, 120) : undefined,
-            role: event && event.role
-          }
-          if (name === 'resumed' && event) {
-            const plans = Array.isArray(event.taskPlans) ? event.taskPlans : []
-            sample.resumed = {
-              isWorking: event.isWorking,
-              messageTotal: event.messageTotal,
-              taskPlans: plans.length,
-              taskPlanKeys: plans[0] ? Object.keys(plans[0]).slice(0, 24) : [],
-              taskPlanSample: plans[0] ? clip(plans[0], 700) : null,
-              model: event.model,
-              provider: event.provider
-            }
-          }
-          if (name.indexOf('plan') >= 0 && event) {
-            sample.plan = clip(event.task_plan || event.plan || event.data || event, 700)
-          }
-          if (name.startsWith('tool.') && event) {
-            sample.tool = {
-              name: event.name,
-              callId: event.tool_call_id,
-              args: clip(event.arguments, 200),
-              preview: clip(event.preview, 200)
-            }
-          }
-          samples.push(sample)
-        }
-        flush(name === 'resumed' || samples.length === 1)
-      })
-      await new Promise((resolve) => setTimeout(resolve, 20000))
-      try { await handle.close() } catch (_) { /* ignore */ }
-      if (dumpDir) {
-        writeFileSync(join(dumpDir, 'probe-connect-auto.json'), JSON.stringify({
-          at: new Date().toISOString(), sessionId: target.id, agent: target.agent, types, samples
-        }, null, 2))
-      }
+      const data = await ctx.host.request('/api/studio/usage/stats', { query: { days: 7 } })
+      store.setUsage(data)
     } catch (error) {
-      ctx.log.warn('probe auto connect failed', String((error && error.message) || error))
-      if (dumpDir) {
-        try {
-          writeFileSync(join(dumpDir, 'probe-connect-auto.json'), JSON.stringify({
-            at: new Date().toISOString(), error: String((error && error.message) || error), code: error && error.code
-          }, null, 2))
-        } catch (_) { /* ignore */ }
-      }
-    }
-  }, 3000)
-  ctx.lifecycle.add(() => clearTimeout(autoTimer))
-
-  ctx.events.on('*', (event) => {
-    try {
-      const type = String((event && event.type) || 'unknown')
-      counts[type] = (counts[type] || 0) + 1
-      events.push(summarizeEvent(event))
-      while (events.length > MAX_EVENTS) events.shift()
-      dirty = true
-      dump(false)
-    } catch (error) {
-      ctx.log.warn('probe event failed', String((error && error.message) || error))
-    }
-  })
-
-  registerRpc(ctx, contract, 'probe-events', async () => ({
-    startedAt,
-    now: Date.now(),
-    total: Object.values(counts).reduce((a, b) => a + b, 0),
-    counts,
-    recent: events.slice(-60)
-  }))
-
-  registerRpc(ctx, contract, 'probe-api', async (_input, run) => {
-    const out = {
-      at: new Date().toISOString(),
-      identity: {
-        userId: run.identity.userId,
-        profile: run.identity.profile,
-        surface: run.identity.surface || null
-      },
-      calls: {}
-    }
-    const runCall = async (name, fn, slim) => {
-      try {
-        const value = await fn()
-        out.calls[name] = { ok: true, value: slim ? slim(value) : value }
-      } catch (error) {
-        out.calls[name] = {
-          ok: false,
-          error: String((error && error.message) || error),
-          code: error && error.code,
-          status: error && error.status
-        }
-      }
-    }
-
-    let sessionIds = []
-    await runCall('sessions', () => run.host.sessions.list({ limit: 6 }), (value) => {
-      const list = Array.isArray(value && value.sessions) ? value.sessions : []
-      sessionIds = list.map((s) => s.id).filter(Boolean).slice(0, 3)
-      return {
-        total: value && value.total,
-        count: list.length,
-        keys: list[0] ? Object.keys(list[0]).slice(0, 40) : [],
-        profiles: [...new Set(list.map((s) => s.profile))],
-        sessions: list.map(slimSession)
-      }
-    })
-    if (sessionIds.length) {
-      await runCall('batchUsage', () => run.host.request('/api/studio/sessions/usage', { query: { ids: sessionIds.join(',') } }), (value) => ({
-        keys: value && typeof value === 'object' ? Object.keys(value) : [],
-        sample: clip(value, 900)
-      }))
-    }
-    await runCall('profiles', () => run.host.request('/api/hermes/profiles/runtime-statuses'), (value) => ({
-      keys: value && typeof value === 'object' ? Object.keys(value).slice(0, 20) : [],
-      sample: clip(value, 900)
-    }))
-    await runCall('usageToday', () => run.host.request('/api/studio/usage/stats', { query: { period: 'today' } }), slimUsage)
-    await runCall('usage7d', () => run.host.request('/api/studio/usage/stats', { query: { days: 7 } }), slimUsage)
-    await runCall('skills', () => run.host.request('/api/hermes/skills/usage/stats'), (value) => ({
-      keys: value && typeof value === 'object' ? Object.keys(value).slice(0, 20) : [],
-      sample: clip(value, 600)
-    }))
-    await runCall('sessionTasks', () => run.host.request('/api/studio/session-tasks'), (value) => ({
-      total: value && value.total,
-      has_more: value && value.has_more,
-      keys: value && value.tasks && value.tasks[0] ? Object.keys(value.tasks[0]) : [],
-      sample: value && Array.isArray(value.tasks) ? value.tasks.slice(0, 2) : null
-    }))
-    try {
-      if (dumpDir) writeFileSync(join(dumpDir, 'probe-api.json'), JSON.stringify(out, null, 2))
-    } catch (error) {
-      ctx.log.warn('probe api dump failed', String((error && error.message) || error))
-    }
-    return out
-  })
-
-  registerRpc(ctx, contract, 'probe-connect', async (input, run) => {
-    const sessionId = String(input.sessionId)
-    const waitMs = Math.min(30000, Math.max(1000, Number(input.waitMs) || 6000))
-    const types = Object.create(null)
-    const samples = []
-    let handle = null
-    try {
-      handle = await run.host.sessions.connect(sessionId, (event) => {
-        try {
-          const name = String((event && event.event) || 'unknown')
-          types[name] = (types[name] || 0) + 1
-          if (samples.length < 40) {
-            samples.push({
-              event: name,
-              keys: event && typeof event === 'object' ? Object.keys(event).slice(0, 20) : [],
-              delta: typeof (event && event.delta) === 'string' ? event.delta.slice(0, 120) : undefined,
-              role: event && event.role,
-              timestamp: event && event.timestamp
-            })
-          }
-        } catch (_) { /* ignore */ }
-      })
-      await new Promise((resolve) => setTimeout(resolve, waitMs))
+      ctx.log.warn('usage poll failed', String((error && error.message) || error))
     } finally {
-      if (handle && typeof handle.close === 'function') {
-        try { await handle.close() } catch (_) { /* ignore */ }
-      }
+      usageBusy = false
     }
-    const out = { sessionId, waitMs, types, samples }
+  }
+
+  async function pollSkills() {
     try {
-      if (dumpDir) writeFileSync(join(dumpDir, 'probe-connect.json'), JSON.stringify(out, null, 2))
+      const data = await ctx.host.request('/api/hermes/skills/usage/stats')
+      const top = Array.isArray(data && data.top_skills) ? data.top_skills : []
+      store.setSkills(top[0] ? { name: top[0].skill, count: top[0].total_count || top[0].count } : null, top)
     } catch (error) {
-      ctx.log.warn('probe connect dump failed', String((error && error.message) || error))
+      ctx.log.warn('skills poll failed', String((error && error.message) || error))
     }
-    return out
+  }
+
+  async function pollRate() {
+    if (rateBusy) return
+    const t = Math.floor(now() / 1000)
+    const ids = []
+    for (const s of store.sessions.values()) {
+      if (s.archived) continue
+      if (t - (s.lastActive || 0) < 600 || (store.streams.get(s.id) || {}).working) ids.push(s.id)
+      if (ids.length >= 24) break
+    }
+    if (!ids.length) return
+    rateBusy = true
+    try {
+      const data = await ctx.host.request('/api/studio/sessions/usage', { query: { ids: ids.join(',') } })
+      let total = 0
+      let input = 0
+      let output = 0
+      let cacheRead = 0
+      for (const id of ids) {
+        const row = data && data[id]
+        if (!row) continue
+        total += (row.input_tokens || 0) + (row.output_tokens || 0) + (row.cache_read_tokens || 0)
+        input += row.input_tokens || 0
+        output += row.output_tokens || 0
+        cacheRead += row.cache_read_tokens || 0
+      }
+      const at = now()
+      if (lastRate.at) {
+        const dt = (at - lastRate.at) / 1000
+        const dTotal = Math.max(0, total - lastRate.total)
+        const dOutput = Math.max(0, output - lastRate.output)
+        rateHistory.push({ at, total })
+        while (rateHistory.length > 2 && at - rateHistory[0].at > 90000) rateHistory.shift()
+        const span = (at - rateHistory[0].at) / 1000
+        const gained = total - rateHistory[0].total
+        const hit = input + cacheRead > 0 ? cacheRead / (input + cacheRead) : 0
+        store.setRate({
+          tokensPerSec: span > 1 ? round(Math.max(0, gained) / span, 1) : round(dTotal / dt, 1),
+          outputPerSec: dt > 0.5 ? round(dOutput / dt, 1) : 0,
+          cacheHit: round(hit * 100)
+        })
+      }
+      lastRate = { total, input, output, cacheRead, at }
+    } catch (error) {
+      ctx.log.warn('rate poll failed', String((error && error.message) || error))
+    } finally {
+      rateBusy = false
+    }
+  }
+
+  function viewerActive(ms = VIEWER_TTL_MS) {
+    return now() - lastViewerAt < ms
+  }
+
+  const sessionTimer = setInterval(pollSessions, SESSION_POLL_MS)
+  const usageTimer = setInterval(() => { if (viewerActive(SKILL_POLL_MS)) pollUsage() }, USAGE_POLL_MS)
+  const skillTimer = setInterval(() => { if (viewerActive(SKILL_POLL_MS)) pollSkills() }, SKILL_POLL_MS)
+  const rateTimer = setInterval(() => { if (viewerActive()) pollRate() }, RATE_POLL_MS)
+  const metricTimer = setInterval(() => { if (viewerActive()) metrics.sample() }, 2000)
+  const pruneTimer = setInterval(() => conns.prune(), 30000)
+
+  ctx.lifecycle.add(() => {
+    clearInterval(sessionTimer)
+    clearInterval(usageTimer)
+    clearInterval(skillTimer)
+    clearInterval(rateTimer)
+    clearInterval(metricTimer)
+    clearInterval(pruneTimer)
+    conns.closeAll()
   })
 
-  registerRpc(ctx, contract, 'probe-reset', async () => {
-    events.length = 0
-    for (const key of Object.keys(counts)) delete counts[key]
-    startedAt = Date.now()
-    return null
+  ctx.events.on('chat.*', (event) => {
+    try {
+      const data = event && event.data ? event.data : {}
+      const subject = typeof data.subject === 'string' ? JSON.parse(data.subject) : (data.subject || {})
+      const sessionId = subject.session_id
+      const type = String(event.type || '')
+      const profile = (event.identity && event.identity.profile) || 'default'
+      if (!sessionId) return
+      conns.ensure(sessionId)
+      if (type === 'chat.plan.updated' && data.task_plan) store.setPlan(sessionId, data.task_plan)
+      if (type === 'chat.run.completed' || type === 'chat.run.failed' || type === 'chat.run.stopped') {
+        store.setWorking(sessionId, false)
+      }
+      store.addEvent({ type: type.replace('chat.', ''), profile, agent: (store.streamFor(sessionId) || {}).agent, text: (data.summary && data.summary.status) || '' })
+    } catch (_) { /* ignore */ }
+  })
+
+  pollSessions()
+  metrics.sample()
+  setTimeout(() => { if (viewerActive(SKILL_POLL_MS)) { pollUsage(); pollSkills() } }, 1500)
+
+  // P1 自检：无人打开页面时也落一份快照，便于开发期核对（发布前移除）
+  const selfDumpTimer = setTimeout(() => {
+    try {
+      const snap = store.snapshot(null)
+      snap.host = metrics.state
+      snap.server = { version: VERSION, connections: conns.size(), selfCheck: true }
+      writeDump('snapshot-self.json', snap)
+    } catch (_) { /* ignore */ }
+  }, 6000)
+  ctx.lifecycle.add(() => clearTimeout(selfDumpTimer))
+
+  async function roleOf(run) {
+    const uid = run.identity.userId
+    const cached = roleCache.get(uid)
+    if (cached && now() - cached.at < 60000) return cached.role
+    let role = null
+    try {
+      const auth = await run.host.request('/api/auth/status')
+      role = auth && auth.user && auth.user.role ? auth.user.role : null
+    } catch (_) { /* ignore */ }
+    roleCache.set(uid, { role, at: now() })
+    return role
+  }
+
+  registerRpc(ctx, contract, 'snapshot', async (_input, run) => {
+    lastViewerAt = now()
+    const role = await roleOf(run)
+    const profiles = role === 'super_admin' ? null : [run.identity.profile || 'default']
+    const snap = store.snapshot(profiles)
+    snap.server = {
+      version: VERSION,
+      startedAt,
+      uptimeSec: Math.round((now() - startedAt) / 1000),
+      connections: conns.size(),
+      profiles: profiles || 'all'
+    }
+    snap.host = {
+      cpu: metrics.state.cpu,
+      cpuCores: metrics.state.cpuCores,
+      cpuName: metrics.state.cpuName,
+      ram: metrics.state.ram,
+      ramDetail: metrics.state.ramDetail,
+      disk: metrics.state.disk,
+      net: metrics.state.net,
+      uptimeSec: metrics.state.uptimeSec
+    }
+    if (viewerActive(15000) && now() - store.usage.fetchedAt > 60000) pollUsage()
+    if (viewerActive(15000) && now() - store.skills.fetchedAt > 60000) pollSkills()
+    if (!lastRate.at) pollRate()
+    writeDump('snapshot.json', snap)
+    return snap
+  })
+
+  registerRpc(ctx, contract, 'get-settings', async (_input, run) => {
+    const saved = await run.state.user.namespace('haloflux').get('settings')
+    return { compact: !!(saved && saved.compact) }
+  })
+
+  registerRpc(ctx, contract, 'save-settings', async (input, run) => {
+    await run.state.user.namespace('haloflux').set('settings', { compact: !!input.compact })
+    return { ok: true }
   })
 }

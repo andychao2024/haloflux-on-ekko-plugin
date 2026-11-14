@@ -1,63 +1,50 @@
 {
   "schemaVersion": 1,
-  "description": "P0 探测契约：读取最近业务事件、调用宿主只读接口并返回字段摘要。",
+  "description": "HALOFLUX AI LINK 看板：一次读取聚合快照，以及当前用户的显示设置。",
   "models": {
     "empty": {
       "type": "null",
       "description": "无参数请求。"
     },
-    "probeEvents": {
+    "snapshot": {
       "type": "object",
-      "description": "事件计数与最近事件列表。",
+      "description": "看板快照：会话、Agent、思考流、任务计划、工具、用量、本机指标。",
       "properties": {},
       "required": [],
       "additionalProperties": true
     },
-    "probeApi": {
+    "settings": {
       "type": "object",
-      "description": "宿主接口探测结果。",
-      "properties": {},
-      "required": [],
-      "additionalProperties": true
-    },
-    "connectProbe": {
-      "type": "object",
-      "description": "单个会话的实时事件探测。",
-      "properties": {},
-      "required": [],
-      "additionalProperties": true
-    },
-    "sessionInput": {
-      "type": "object",
-      "description": "要观察的会话 ID。",
+      "description": "当前用户的显示设置。",
       "properties": {
-        "sessionId": { "type": "string", "description": "宿主会话 ID。", "minLength": 1, "maxLength": 200 },
-        "waitMs": { "type": "integer", "description": "观察时长，毫秒，1000-30000。", "minimum": 1000, "maximum": 30000 }
+        "compact": { "type": "boolean", "description": "紧凑布局；默认 false。" }
       },
-      "required": ["sessionId"],
+      "required": ["compact"],
+      "additionalProperties": false
+    },
+    "saved": {
+      "type": "object",
+      "description": "设置已持久化。",
+      "properties": { "ok": { "type": "boolean", "description": "成功时为 true。", "enum": [true] } },
+      "required": ["ok"],
       "additionalProperties": false
     }
   },
   "rpc": {
-    "probe-events": {
-      "description": "返回事件类型计数与最近事件样本。",
+    "snapshot": {
+      "description": "读取看板快照；页面轮询调用。",
       "input": "empty",
-      "output": "probeEvents"
+      "output": "snapshot"
     },
-    "probe-api": {
-      "description": "调用会话、用量、技能等只读接口并返回摘要。",
+    "get-settings": {
+      "description": "读取当前用户的显示设置。",
       "input": "empty",
-      "output": "probeApi"
+      "output": "settings"
     },
-    "probe-reset": {
-      "description": "清空事件缓冲。",
-      "input": "empty",
-      "output": "empty"
-    },
-    "probe-connect": {
-      "description": "连接指定会话，采样一段时间内的实时事件类型。",
-      "input": "sessionInput",
-      "output": "connectProbe"
+    "save-settings": {
+      "description": "保存当前用户的显示设置。",
+      "input": "settings",
+      "output": "saved"
     }
   },
   "tools": {},
