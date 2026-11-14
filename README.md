@@ -39,7 +39,7 @@
 ## 安装
 
 Studio → 插件中心 → 安装 → 本地目录或 `github:` 地址，启用后从左侧导航打开
-「HALOFLUX AI LINK」。
+「HALOFLUX ON Ekko」。
 
 开发：
 

@@ -6,7 +6,7 @@ import { createMetrics } from './src/metrics.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.9.1'
+const VERSION = '0.9.2'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000

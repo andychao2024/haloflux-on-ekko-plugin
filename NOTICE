@@ -1,0 +1,18 @@
+HALOFLUX ON Ekko — Ekko Studio plugin
+=====================================
+
+Original work: HALOFLUX
+Copyright (c) 2026 Ryder191 (RYDER CODE / Ms MAIKEBAIs CAT)
+https://github.com/Ryder191/haloflux
+Licensed under the PolyForm Noncommercial License 1.0.0. Noncommercial use only.
+
+Studio plugin modification: andychao2024
+https://github.com/andychao2024/ekko-studio-plugin-haloflux-ai-link
+
+Data integration approach referenced from:
+https://github.com/yeshuiwushen/haloflux-ai-link
+
+The HALOFLUX name, audiovisual design, motion system, ring and data-panel
+graphics, color treatment and overall look and feel remain the original
+author's work. This repository only adapts the existing dashboard to the
+Ekko Studio plugin runtime and public Studio APIs.

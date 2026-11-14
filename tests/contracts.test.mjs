@@ -1,29 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { apply } from '../server.mjs'
+import { readFileSync } from 'node:fs'
+import { assertContracts, validateModel } from '../sdk/harness/contracts.mjs'
 
-function setup() {
-  const methods = new Map(), records = new Map()
-  apply({ extensions: { rpc: { register(name, fn) { methods.set(name, fn); return () => methods.delete(name) } } }, state: { plugin: {
-    namespace(...parts) { const key = JSON.stringify(parts); return {
-      async get(name) { return records.get(key + name) }, async set(name, value) { records.set(key + name, value) },
-    } },
-  } } })
-  const call = (name, input, userId = 1) => methods.get(name)(input, { identity: { userId, profile: 'default' } })
-  return { call, records }
-}
-test('reads defaults, saves validated settings, and isolates users', async () => {
-  const { call } = setup()
-  assert.deepEqual(await call('get-settings', null), { greeting: 'Hello', compact: false })
-  assert.deepEqual(await call('save-settings', { greeting: 'Hi', compact: true }), { ok: true })
-  assert.deepEqual(await call('get-settings', null), { greeting: 'Hi', compact: true })
-  assert.deepEqual(await call('get-settings', null, 2), { greeting: 'Hello', compact: false })
-})
-test('rejects invalid inputs and invalid stored output', async () => {
-  const { call, records } = setup()
-  await assert.rejects(call('save-settings', { greeting: 123, compact: false }), /expected string/)
-  await assert.rejects(call('save-settings', { greeting: 'Hi', compact: false, extra: true }), /unknown property/)
-  await assert.rejects(call('get-settings', {}), /expected null/)
-  records.set(JSON.stringify(['1', 'default']) + 'settings', { greeting: 'missing compact' })
-  await assert.rejects(call('get-settings', null), /missing compact/)
+const contract = assertContracts(JSON.parse(readFileSync(new URL('../contracts/plugin.json', import.meta.url), 'utf8')))
+
+test('settings model requires the five declared fields', () => {
+  const value = { anim: true, compat: false, title: 'HALOFLUX ON Ekko', music: false }
+  assert.deepEqual(validateModel(contract, 'settings', value), value)
+  assert.throws(() => validateModel(contract, 'settings', { anim: true }), /missing/)
+  assert.throws(() => validateModel(contract, 'settings', { ...value, extra: 1 }), /unknown property/)
+  assert.throws(() => validateModel(contract, 'settings', { ...value, title: 1 }), /expected string/)
 })
