@@ -176,7 +176,7 @@ function mountSettings(root, ctx) {
         <option value="link">新链接模式（新标签页打开插件看板）</option>
       </select>
     </label>
-    <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式）</label>
+    <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式，默认开启）</label>
     <label><input type="checkbox" id="hls-compat"> 兼容模式（DPR=1，关闭 will-change 与 CSS 动画）</label>
     <label><input type="checkbox" id="hls-music"> 启用背景音乐（首次点击页面后播放）</label>
     <div><button id="hls-save">保存</button> <span class="muted" id="hls-msg"></span></div>
