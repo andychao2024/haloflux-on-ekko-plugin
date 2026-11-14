@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "description": "HALOFLUX AI LINK 看板：一次读取聚合快照，以及当前用户的显示设置。",
+  "description": "HALOFLUX ON Ekko 看板：一次读取聚合快照，以及当前用户的显示设置。",
   "models": {
     "empty": {
       "type": "null",

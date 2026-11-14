@@ -1,4 +1,4 @@
-# HALOFLUX AI LINK · Studio 插件
+# HALOFLUX ON Ekko · Studio 插件
 
 把 [HALOFLUX](https://github.com/Ryder191/haloflux) 的动效看板接入 Ekko Studio：
 原版舞台（圆环 / 光束 / 扫描线）+ HUD + 8 个数据面板，数据全部来自 Studio 公开接口。

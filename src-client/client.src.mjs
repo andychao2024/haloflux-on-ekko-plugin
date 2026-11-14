@@ -1,5 +1,5 @@
 /**
- * HALOFLUX AI LINK · Studio 插件宿主
+ * HALOFLUX ON Ekko · Studio 插件宿主
  * 页面本身是 docker 版原页面（index.html + wp.js + ai-link.js）的单文件副本，
  * 这里只负责：
  *   1. 用 srcdoc 子 iframe 承载它（样式/全局变量与 Studio 隔离）
@@ -281,7 +281,6 @@ export async function mount(root, ctx) {
 
   // 音乐：页面自带的 BGM 模块初始化时只会读 localStorage。这里在脚本执行完
   // 再按插件设置同步一次，避免“设置里已开启但页面仍按旧值静音”。
-  // 浏览器拦截自动播放时，模块会挂起并在下一次点击页面时真正播放。
   try {
     if (window.__bgm) {
       if (typeof window.__bgm.setVol === 'function') window.__bgm.setVol(60)
@@ -289,7 +288,54 @@ export async function mount(root, ctx) {
     }
   } catch (_) { /* ignore */ }
 
+  // Studio 的插件 iframe 是 sandbox="allow-scripts"（不透明来源、没有 allow=autoplay），
+  // 浏览器会拦截有声自动播放。音乐已开启但没真正播放时，给一个明确的点击入口：
+  // 按钮就在 iframe 内，点击属于可信手势，能立刻解锁音频；开始播放后自动消失。
+  let bgmHint = null
+  let bgmTimer = 0
+  function removeBgmHint() {
+    if (bgmHint && bgmHint.parentNode) bgmHint.parentNode.removeChild(bgmHint)
+    bgmHint = null
+  }
+  function showBgmHint(text) {
+    if (!bgmHint) {
+      bgmHint = document.createElement('button')
+      bgmHint.type = 'button'
+      bgmHint.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:2147483200;' +
+        'font:600 11px/1.4 ui-monospace,Consolas,monospace;letter-spacing:.4px;' +
+        'color:#08110d;background:rgba(152,224,207,.94);border:1px solid rgba(152,224,207,.7);' +
+        'border-radius:4px;padding:6px 11px;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.55)'
+      bgmHint.addEventListener('click', () => {
+        try {
+          if (window.__bgm) {
+            if (typeof window.__bgm.setVol === 'function') window.__bgm.setVol(60)
+            if (typeof window.__bgm.set === 'function') window.__bgm.set(true)
+          }
+        } catch (_) { /* ignore */ }
+        setTimeout(syncBgmHint, 900)
+      })
+      root.appendChild(bgmHint)
+    }
+    bgmHint.textContent = text
+  }
+  function syncBgmHint() {
+    if (!music) { removeBgmHint(); return }
+    const bgm = window.__bgm
+    if (!bgm) { showBgmHint('♪ 音频未加载，点此重试'); return }
+    let playing = false
+    try { playing = !!(bgm.isPlaying && bgm.isPlaying()) } catch (_) { /* ignore */ }
+    if (playing) { removeBgmHint(); return }
+    const audio = document.getElementById('bgmAudio')
+    if (audio && audio.error) { showBgmHint('♪ 音频加载失败，点此重试'); return }
+    showBgmHint('♪ 点此播放背景音乐')
+  }
+  const bgmInitial = setTimeout(syncBgmHint, 1200)
+  bgmTimer = setInterval(syncBgmHint, 2000)
+
   ctx.lifecycle.add(() => {
+    clearTimeout(bgmInitial)
+    if (bgmTimer) clearInterval(bgmTimer)
+    removeBgmHint()
     for (const handle of handles.values()) {
       try { if (handle && handle.close) handle.close() } catch (_) { /* ignore */ }
     }
@@ -316,7 +362,7 @@ function mountSettings(root, ctx) {
   const wrap = document.createElement('div')
   wrap.className = 'hls'
   wrap.innerHTML = `
-    <h2>HALOFLUX AI LINK · 设置</h2>
+    <h2>HALOFLUX ON Ekko · 设置</h2>
     <label>看板标题
       <input id="hls-title" type="text" maxlength="80" placeholder="Ekko Studio / Rock5 ITX RK3588"
         style="flex:1;min-width:280px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.2)">
