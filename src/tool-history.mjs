@@ -1,17 +1,36 @@
 /**
  * 从 Studio 会话历史中提取最近的工具调用。
- * assistant 消息的 tool_calls 提供名称与参数；tool 消息在没有对应调用时兜底。
+ * assistant 消息的 tool_calls 提供名称与参数；tool 消息提供结果状态。
+ * 状态口径与 docker 版一致：有结果是 done / error，没有结果且 30 分钟内是
+ * running（面板显示青色），更早则是 idle（灰色）。
  * 只读、无副作用，方便单测。
  */
 const clip = (text, max) => {
   const s = String(text == null ? '' : text)
   return s.length > max ? s.slice(0, max) : s
 }
+const RUNNING_WINDOW_MS = 30 * 60 * 1000
 
-export function parseToolMessages(messages, limit = 8) {
+function resultState(content) {
+  // Studio 用 "Error: …" 前缀表示工具失败；不要被正文里的 error 字样误判
+  return /^\s*error\b/i.test(String(content || '')) ? 'error' : 'done'
+}
+
+export function parseToolMessages(messages, limit = 8, now = Date.now()) {
   const entries = []
-  const byCallId = new Map()
   const list = Array.isArray(messages) ? messages : []
+  const results = new Map()   // tool_call_id -> done | error
+
+  for (const message of list) {
+    if (!message || message.role !== 'tool') continue
+    if (message.tool_call_id) results.set(message.tool_call_id, resultState(message.content))
+  }
+
+  const fallbackState = (at) => {
+    if (!at) return 'idle'
+    return now - at < RUNNING_WINDOW_MS ? 'running' : 'idle'
+  }
+
   for (let i = 0; i < list.length; i++) {
     const message = list[i]
     if (!message) continue
@@ -29,19 +48,30 @@ export function parseToolMessages(messages, limit = 8) {
         if (arg && typeof arg === 'object') {
           try { arg = JSON.stringify(arg) } catch (_) { arg = '' }
         }
-        const entry = { at, name: String(fn.name), arg: clip(arg || '', 80), order: i }
-        entries.push(entry)
-        if (call && call.id) byCallId.set(call.id, entry)
+        const id = call && call.id ? call.id : ''
+        entries.push({
+          at,
+          name: String(fn.name),
+          arg: clip(arg || '', 80),
+          state: (id && results.get(id)) || fallbackState(at),
+          order: i
+        })
       }
     } else if (message.role === 'tool' && message.tool_name) {
-      const hit = message.tool_call_id ? byCallId.get(message.tool_call_id) : null
-      if (hit) {
-        if (!hit.at) hit.at = at
+      if (message.tool_call_id && results.has(message.tool_call_id)) {
+        // 已经有对应的 assistant 调用，不重复显示结果消息
         continue
       }
-      entries.push({ at, name: String(message.tool_name), arg: '', order: i })
+      entries.push({
+        at,
+        name: String(message.tool_name),
+        arg: '',
+        state: resultState(message.content),
+        order: i
+      })
     }
   }
+
   entries.sort((a, b) => (b.at || 0) - (a.at || 0) || b.order - a.order)
-  return entries.slice(0, limit).map(({ at, name, arg }) => ({ at, name, arg }))
+  return entries.slice(0, limit).map(({ at, name, arg, state }) => ({ at, name, arg, state }))
 }

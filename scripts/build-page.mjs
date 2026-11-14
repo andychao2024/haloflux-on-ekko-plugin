@@ -18,9 +18,6 @@ const html = readFileSync(join(dir, 'index.html'), 'utf8')
 const wp = readFileSync(join(dir, 'wp.js'), 'utf8')
 const ai = readFileSync(join(dir, 'ai-link.js'), 'utf8')
 const build = (ai.match(/var BUILD = '([^']+)'/) || [])[1] || 'v0.0'
-import { existsSync } from 'node:fs'
-const bgmPath = join(root, 'assets/bgm.mp3')
-const bgm = existsSync(bgmPath) ? 'data:audio/mpeg;base64,' + readFileSync(bgmPath).toString('base64') : ''
 
 /* 只做一处数据口径改动：插件不再展示 GPU（很多设备没有），
    面板改名并去掉面板内与悬浮说明里的 GPU 图例，动效/布局保持原版。 */
@@ -42,6 +39,9 @@ aiPatched = mustReplace(aiPatched,
 aiPatched = mustReplace(aiPatched,
   "label(o.x, gpuTxt3, o.w - gpuW3 - 2, 2, '#b98cff');",
   '', 'GPU 图例绘制')
+aiPatched = mustReplace(aiPatched,
+  'try { buildBgmToggle(); } catch (e) { /* ignore */ }',
+  'try { /* 背景音乐功能已移除 */ } catch (e) { /* ignore */ }', 'BGM 开关')
 
 const escapeScript = (code) => code.replace(/<\/script/gi, '<\\/script')
 
@@ -68,13 +68,6 @@ const shim = `
       try { Object.defineProperty(window, name, { value: memoryStore(), configurable: true }); } catch (_) {}
     }
   });
-  /* 插件设置里的音乐开关：写入原版 BGM 模块读取的键 */
-  try {
-    var prefs = window.__hlSettings || {};
-    var store = null;
-    try { window.localStorage.getItem('__hl_probe__'); store = window.localStorage; } catch (e) { store = null; }
-    if (store) store.setItem('haloflux.bgm.v1', JSON.stringify({ on: !!prefs.music, vol: 60 }));
-  } catch (e) { /* ignore */ }
 
   var settings = { anim: true, fps: 30 };
   var seq = 0, pending = {};
@@ -158,22 +151,30 @@ const control = `
 })();
 `
 
+/* 移除页面自带的 BGM 模块（整个 <script> 块）。 */
+function stripBgmScript(text) {
+  const start = text.indexOf('(function initBGM() {')
+  if (start < 0) throw new Error('未找到页面 BGM 模块')
+  const open = text.lastIndexOf('<script>', start)
+  const end = text.indexOf('</script>', text.indexOf('window.__bgm = {', start))
+  if (open < 0 || end < 0) throw new Error('BGM 模块结构已变')
+  return text.slice(0, open) + text.slice(end + '</script>'.length)
+}
+
 let out = html
-  .replace(/<audio id="bgmAudio"[^>]*><\/audio>/, bgm
-    ? '<audio id="bgmAudio" data-src="' + bgm + '" loop preload="auto" playsinline></audio>'
-    : '<audio id="bgmAudio" loop preload="auto" playsinline></audio>')
-  // 数据桥必须放在页面自带 BGM 脚本之前：BGM 在初始化时读取 localStorage，
-  // 晚注入就会读到旧状态（设置里开了音乐却没声音）。
+  // 完全去掉背景音乐：移除音频元素与自带 BGM 模块，页面不再加载 3.8MB 音频。
+  .replace(/<audio id="bgmAudio"[^>]*><\/audio>/, '')
   .replace(/<body([^>]*)>/, `<body$1>\n<script>${escapeScript(shim)}</script>\n<script>${escapeScript(control)}</script>`)
   .replace('<script src="wp.js"></script>', `<script>${escapeScript(wp)}</script>`)
   .replace(/<script src="ai-link\.js[^"]*"><\/script>/, `<script>${escapeScript(aiPatched)}</script>`)
 
+out = stripBgmScript(out)
 out = out.replace(/<title>[^<]*<\/title>/, '<title>HALOFLUX ON Ekko</title>')
 
 out = out.replace('</head>', `<style>
-/* 插件内只做两件最小改动，其余布局/动效/卡片尺寸与 docker 版完全一致：
+/* 插件内只做最小改动，其余布局/动效/卡片尺寸与 docker 版完全一致：
    1. 背景色对齐页面自身 --bg
-   2. 右上角音乐开关隐藏（音乐改到插件设置页） */
+   2. 右上角控制条隐藏（插件不提供背景音乐） */
 html,body{background:#08090b !important}
 #aix-topbar{display:none !important}
 </style></head>`)

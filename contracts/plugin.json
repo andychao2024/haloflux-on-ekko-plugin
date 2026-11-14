@@ -29,17 +29,12 @@
           "type": "string",
           "description": "看板左上角标题；空字符串使用默认标题。",
           "maxLength": 80
-        },
-        "music": {
-          "type": "boolean",
-          "description": "启用背景音乐；默认 false。开启后首次点击页面任意位置开始播放。"
         }
       },
       "required": [
         "anim",
         "compat",
-        "title",
-        "music"
+        "title"
       ],
       "additionalProperties": false
     },

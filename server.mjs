@@ -105,7 +105,7 @@ export function apply(ctx) {
           at: item.at,
           name: item.name,
           arg: item.arg,
-          state: 'done'
+          state: item.state
         }))
         store.setToolHistory(meta.id, list)
       } catch (error) {
@@ -256,8 +256,7 @@ export function apply(ctx) {
     return {
       anim: saved.anim !== false,
       compat: !!saved.compat,
-      title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : '',
-      music: !!saved.music
+      title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : ''
     }
   })
 
@@ -265,8 +264,7 @@ export function apply(ctx) {
     await run.state.user.namespace('haloflux').set('settings', {
       anim: input.anim !== false,
       compat: !!input.compat,
-      title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : '',
-      music: !!input.music
+      title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : ''
     })
     return { ok: true }
   })

@@ -19,11 +19,10 @@ function pageWithTitle(html, title) {
 export async function mount(root, ctx) {
   if (ctx.view === 'settings') return mountSettings(root, ctx)
 
-  const settings = await ctx.rpc.call('get-settings').catch(() => ({ anim: true, compat: false, title: '', music: false }))
+  const settings = await ctx.rpc.call('get-settings').catch(() => ({ anim: true, compat: false, title: '' }))
   const anim = !(settings && settings.anim === false)
   const compat = !!(settings && settings.compat)
   const title = (settings && typeof settings.title === 'string') ? settings.title.trim() : ''
-  const music = !!(settings && settings.music)
 
   const style = document.createElement('style')
   style.textContent = `
@@ -49,7 +48,6 @@ export async function mount(root, ctx) {
 
   root.classList.add('hl-root')
   root.innerHTML = parsed.body.innerHTML
-  window.__hlSettings = { music: music }
 
   // ---- 实时会话连接：放在页面端，使用当前查看者的身份与权限 ----
   const live = new Map()          // sessionId -> { agent, profile, title, reasoning, text, ts, working, ... }
@@ -106,8 +104,17 @@ export async function mount(root, ctx) {
       slot.lastToolAt = Date.now(); slot.ts = Date.now(); slot.working = true
       if (name === 'tool.started') {
         liveToolCount += 1
-        liveTools.unshift({ at: Date.now(), ageSec: 0, agent: slot.agent, name: toolName, arg: clipText(arg, 80), state: 'started' })
+        liveTools.unshift({ at: Date.now(), ageSec: 0, agent: slot.agent, name: toolName, arg: clipText(arg, 80), state: 'running' })
         while (liveTools.length > 8) liveTools.pop()
+      } else {
+        // 完成/失败要落到同一条调用上，面板才会从青色变为灰色/红色
+        const hit = liveTools.find((tool) =>
+          tool.name === toolName && tool.agent === slot.agent && tool.state === 'running')
+        if (hit) {
+          hit.state = name === 'tool.failed' ? 'error' : 'done'
+          hit.at = Date.now()
+          hit.ageSec = 0
+        }
       }
       liveEvent = { type: 'tool', at: Date.now() }
       return
@@ -279,63 +286,7 @@ export async function mount(root, ctx) {
     window.__hlApplySettings({ anim, compat })
   }
 
-  // 音乐：页面自带的 BGM 模块初始化时只会读 localStorage。这里在脚本执行完
-  // 再按插件设置同步一次，避免“设置里已开启但页面仍按旧值静音”。
-  try {
-    if (window.__bgm) {
-      if (typeof window.__bgm.setVol === 'function') window.__bgm.setVol(60)
-      if (typeof window.__bgm.set === 'function') window.__bgm.set(music)
-    }
-  } catch (_) { /* ignore */ }
-
-  // Studio 的插件 iframe 是 sandbox="allow-scripts"（不透明来源、没有 allow=autoplay），
-  // 浏览器会拦截有声自动播放。音乐已开启但没真正播放时，给一个明确的点击入口：
-  // 按钮就在 iframe 内，点击属于可信手势，能立刻解锁音频；开始播放后自动消失。
-  let bgmHint = null
-  let bgmTimer = 0
-  function removeBgmHint() {
-    if (bgmHint && bgmHint.parentNode) bgmHint.parentNode.removeChild(bgmHint)
-    bgmHint = null
-  }
-  function showBgmHint(text) {
-    if (!bgmHint) {
-      bgmHint = document.createElement('button')
-      bgmHint.type = 'button'
-      bgmHint.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:2147483200;' +
-        'font:600 11px/1.4 ui-monospace,Consolas,monospace;letter-spacing:.4px;' +
-        'color:#08110d;background:rgba(152,224,207,.94);border:1px solid rgba(152,224,207,.7);' +
-        'border-radius:4px;padding:6px 11px;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.55)'
-      bgmHint.addEventListener('click', () => {
-        try {
-          if (window.__bgm) {
-            if (typeof window.__bgm.setVol === 'function') window.__bgm.setVol(60)
-            if (typeof window.__bgm.set === 'function') window.__bgm.set(true)
-          }
-        } catch (_) { /* ignore */ }
-        setTimeout(syncBgmHint, 900)
-      })
-      root.appendChild(bgmHint)
-    }
-    bgmHint.textContent = text
-  }
-  function syncBgmHint() {
-    if (!music) { removeBgmHint(); return }
-    const bgm = window.__bgm
-    if (!bgm) { showBgmHint('♪ 音频未加载，点此重试'); return }
-    let playing = false
-    try { playing = !!(bgm.isPlaying && bgm.isPlaying()) } catch (_) { /* ignore */ }
-    if (playing) { removeBgmHint(); return }
-    const audio = document.getElementById('bgmAudio')
-    if (audio && audio.error) { showBgmHint('♪ 音频加载失败，点此重试'); return }
-    showBgmHint('♪ 点此播放背景音乐')
-  }
-  const bgmInitial = setTimeout(syncBgmHint, 1200)
-  bgmTimer = setInterval(syncBgmHint, 2000)
-
   ctx.lifecycle.add(() => {
-    clearTimeout(bgmInitial)
-    if (bgmTimer) clearInterval(bgmTimer)
-    removeBgmHint()
     for (const handle of handles.values()) {
       try { if (handle && handle.close) handle.close() } catch (_) { /* ignore */ }
     }
@@ -369,7 +320,6 @@ function mountSettings(root, ctx) {
     </label>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式，默认开启）</label>
     <label><input type="checkbox" id="hls-compat"> 兼容模式（DPR=1，关闭 will-change 与 CSS 动画）</label>
-    <label><input type="checkbox" id="hls-music"> 启用背景音乐（首次点击页面后播放）</label>
     <div><button id="hls-save">保存</button> <span class="muted" id="hls-msg"></span></div>
     <div class="muted">页面与动效来自 HALOFLUX 原作；数据来自 Studio 会话/用量接口与本机指标。插件只读，不读取数据库文件，不发外部网络请求。</div>
     <table>
@@ -384,21 +334,18 @@ function mountSettings(root, ctx) {
   const animBox = wrap.querySelector('#hls-anim')
   const compatBox = wrap.querySelector('#hls-compat')
   const titleInput = wrap.querySelector('#hls-title')
-  const musicBox = wrap.querySelector('#hls-music')
   const msg = wrap.querySelector('#hls-msg')
   ctx.rpc.call('get-settings').then((s) => {
     animBox.checked = !(s && s.anim === false)
     compatBox.checked = !!(s && s.compat)
     titleInput.value = (s && s.title) || ''
-    musicBox.checked = !!(s && s.music)
   }).catch(() => { animBox.checked = true })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
       await ctx.rpc.call('save-settings', {
         anim: !!animBox.checked,
         compat: !!compatBox.checked,
-        title: titleInput.value.trim(),
-        music: !!musicBox.checked
+        title: titleInput.value.trim()
       })
       msg.textContent = '已保存，重新打开看板生效'
     } catch (error) {
