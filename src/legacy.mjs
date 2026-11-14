@@ -32,6 +32,7 @@ export function buildLegacyStats(snap, host, version) {
     disk: host.disk ? Object.assign({ available: true }, host.disk) : null,
     net: host.net || null,
     uptimeSec: num(host.uptimeSec),
+    link: { source: 'studio-plugin' },
     server: {
       version,
       cores: Array.isArray(host.cpuCores) ? host.cpuCores.length : 0,
@@ -66,14 +67,14 @@ export function buildLegacyStats(snap, host, version) {
         running: a.active ? 1 : 0,
         tokensTotal: a.tokens,
         messages: a.messages,
-        toolCalls: null,
+        toolCalls: num(snap.toolCount) || 0,
         model: a.model || null,
         title: null,
         lastActive: a.lastActive,
         active: !!a.active
       })),
       sessions: snap.sessions ? snap.sessions.total : null,
-      toolCalls: null,
+      toolCalls: num(snap.toolCount) || 0,
       messages: agents.reduce((n, a) => n + (a.messages || 0), 0),
       recentTools: tools.map((t) => ({
         agent: t.agent,

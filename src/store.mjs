@@ -15,6 +15,7 @@ export function createStore() {
   const streams = new Map()      // sessionId -> stream
   const plans = new Map()        // sessionId -> plan
   const tools = []
+  let toolCount = 0
   const events = []
   const usage = { today: null, daily: [], fetchedAt: 0, totals: null }
   const rate = { tokensPerSec: 0, outputPerSec: 0, cacheHit: 0, updatedAt: 0 }
@@ -110,6 +111,7 @@ export function createStore() {
       arg: clip(tool.arg || '', 80),
       state: tool.state || 'started'
     }
+    toolCount += 1
     tools.push(entry)
     while (tools.length > MAX_TOOLS) tools.shift()
     return entry
@@ -291,6 +293,7 @@ export function createStore() {
       agents,
       streams: streamList.slice(0, 10),
       taskPlan: { plans: planList.slice(0, 10) },
+      toolCount,
       tools: tools.filter((x) => ok(x.profile)).slice(-20).reverse(),
       events: events.filter((x) => ok(x.profile)).slice(-30).reverse(),
       skills: { current: skills.current, top: skills.top }

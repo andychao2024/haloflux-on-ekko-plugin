@@ -18,6 +18,9 @@ const html = readFileSync(join(dir, 'index.html'), 'utf8')
 const wp = readFileSync(join(dir, 'wp.js'), 'utf8')
 const ai = readFileSync(join(dir, 'ai-link.js'), 'utf8')
 const build = (ai.match(/var BUILD = '([^']+)'/) || [])[1] || 'v0.0'
+import { existsSync, statSync } from 'node:fs'
+const bgmPath = join(root, 'assets/bgm.mp3')
+const bgm = existsSync(bgmPath) ? 'data:audio/mpeg;base64,' + readFileSync(bgmPath).toString('base64') : ''
 const aiPatched = ai
   .replace(/'CPU \/ GPU 负载'/g, "'CPU / 磁盘 IO'")
   .replace('红 CPU · 蓝 NVMe IO · 紫 GPU（0% 时隐藏）', '红 CPU · 蓝 NVMe IO')
@@ -130,7 +133,9 @@ const control = `
 `
 
 let out = html
-  .replace(/<audio id="bgmAudio"[^>]*><\/audio>/, '<audio id="bgmAudio" loop playsinline></audio>')
+  .replace(/<audio id="bgmAudio"[^>]*><\/audio>/, bgm
+    ? '<audio id="bgmAudio" data-src="' + bgm + '" loop playsinline></audio>'
+    : '<audio id="bgmAudio" loop playsinline></audio>')
   .replace('<script src="wp.js"></script>', `<script>${escapeScript(wp)}</script>\n<script>${escapeScript(shim)}</script>\n<script>${escapeScript(control)}</script>`)
   .replace(/<script src="ai-link\.js[^"]*"><\/script>/, `<script>${escapeScript(aiPatched)}</script>`)
 
