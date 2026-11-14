@@ -1,0 +1,15 @@
+{
+  "name": "studio-plugin-haloflux-ai-link",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "ekko-studio plugins dev .",
+    "harness:check": "node scripts/plugin-harness.mjs check",
+    "test": "node --test tests/*.test.mjs",
+    "prepack": "npm run harness:check && npm test && npm run build --if-present && npm run harness:check"
+  },
+  "devDependencies": {
+    "@ekko-studio/plugin-sdk": "file:./sdk"
+  }
+}

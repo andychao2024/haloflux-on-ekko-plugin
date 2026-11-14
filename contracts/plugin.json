@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "description": "P0 探测契约：读取最近业务事件、调用宿主只读接口并返回字段摘要。",
+  "models": {
+    "empty": {
+      "type": "null",
+      "description": "无参数请求。"
+    },
+    "probeEvents": {
+      "type": "object",
+      "description": "事件计数与最近事件列表。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    },
+    "probeApi": {
+      "type": "object",
+      "description": "宿主接口探测结果。",
+      "properties": {},
+      "required": [],
+      "additionalProperties": true
+    }
+  },
+  "rpc": {
+    "probe-events": {
+      "description": "返回事件类型计数与最近事件样本。",
+      "input": "empty",
+      "output": "probeEvents"
+    },
+    "probe-api": {
+      "description": "调用会话、用量、技能等只读接口并返回摘要。",
+      "input": "empty",
+      "output": "probeApi"
+    },
+    "probe-reset": {
+      "description": "清空事件缓冲。",
+      "input": "empty",
+      "output": "empty"
+    }
+  },
+  "tools": {},
+  "commands": {},
+  "actions": {},
+  "events": {},
+  "storage": {},
+  "checkpoints": {}
+}

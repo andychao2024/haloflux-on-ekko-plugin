@@ -1,0 +1,47 @@
+{
+  "id": "haloflux-ai-link",
+  "name": "HALOFLUX AI LINK",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "description": "Studio 原生 AI 运行看板：会话、令牌、思考过程、任务计划、工具调用、CPU/磁盘。",
+  "author": {
+    "name": "Ryder191 (original HALOFLUX) / andychao2024 (Studio plugin)"
+  },
+  "repository": "https://github.com/andychao2024/ekko-studio-plugin-haloflux-ai-link",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "server": "server.mjs",
+  "client": "client.mjs",
+  "permissions": [
+    "api.read",
+    "events",
+    "ui"
+  ],
+  "views": [
+    {
+      "id": "dashboard",
+      "title": "AI 链路",
+      "slot": "page"
+    },
+    {
+      "id": "settings",
+      "title": "设置",
+      "slot": "settings"
+    }
+  ],
+  "navigation": {
+    "main": [
+      {
+        "viewId": "dashboard",
+        "icon": "chart",
+        "order": 40
+      }
+    ],
+    "settings": [
+      {
+        "viewId": "settings",
+        "icon": "settings",
+        "order": 40
+      }
+    ]
+  }
+}
