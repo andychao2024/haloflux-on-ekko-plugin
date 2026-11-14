@@ -28,6 +28,25 @@ const shim = `
 /* ---- Studio 插件数据桥：/stats 走 postMessage → 插件 RPC ---- */
 (function () {
   var BUILD = ${JSON.stringify(build)};
+  /* Studio 插件 iframe 可能是不透明来源，storage 访问会抛 SecurityError；
+     这里给 ai-link.js 提供内存版实现，避免初始化中断。 */
+  function memoryStore() {
+    var data = {};
+    return {
+      getItem: function (k) { return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+      setItem: function (k, v) { data[k] = String(v); },
+      removeItem: function (k) { delete data[k]; },
+      clear: function () { data = {}; },
+      key: function (i) { return Object.keys(data)[i] || null; },
+      get length() { return Object.keys(data).length; }
+    };
+  }
+  ['localStorage', 'sessionStorage'].forEach(function (name) {
+    try { window[name].getItem('__hl_probe__'); }
+    catch (error) {
+      try { Object.defineProperty(window, name, { value: memoryStore(), configurable: true }); } catch (_) {}
+    }
+  });
   var settings = { anim: true, fps: 30 };
   var seq = 0, pending = {};
   function applySettings(v) {
