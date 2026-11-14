@@ -5,11 +5,26 @@
  * running（面板显示青色），更早则是 idle（灰色）。
  * 只读、无副作用，方便单测。
  */
-const clip = (text, max) => {
-  const s = String(text == null ? '' : text)
-  return s.length > max ? s.slice(0, max) : s
-}
 const RUNNING_WINDOW_MS = 30 * 60 * 1000
+const ARG_KEYS = ['command', 'file_path', 'path', 'pattern', 'query', 'url',
+  'prompt', 'description', 'session_id', 'sessionId', 'skill', 'tool', 'action', 'glob']
+
+/** 与 docker 版一致：从工具参数对象里挑一个最有代表性的一行摘要。 */
+function toolArg(input) {
+  if (!input || typeof input !== 'object') return ''
+  let v = null
+  for (const key of ARG_KEYS) {
+    const cand = input[key]
+    if (typeof cand === 'string' && cand.trim()) { v = cand; break }
+  }
+  if (v === null) {
+    for (const key of Object.keys(input)) {
+      if (typeof input[key] === 'string' && input[key].trim()) { v = input[key]; break }
+    }
+  }
+  if (v === null) return ''
+  return String(v).replace(/\s+/g, ' ').trim().slice(0, 160)
+}
 
 function resultState(content) {
   // Studio 用 "Error: …" 前缀表示工具失败；不要被正文里的 error 字样误判
@@ -44,15 +59,21 @@ export function parseToolMessages(messages, limit = 8, now = Date.now()) {
       for (const call of calls) {
         const fn = call && call.function ? call.function : call
         if (!fn || !fn.name) continue
-        let arg = fn.arguments
-        if (arg && typeof arg === 'object') {
-          try { arg = JSON.stringify(arg) } catch (_) { arg = '' }
+        let raw = fn.arguments
+        if (typeof raw === 'string') {
+          const text = raw.trim()
+          if (text.startsWith('{') || text.startsWith('[')) {
+            try { raw = JSON.parse(text) } catch (_) { /* 保留原始字符串 */ }
+          }
         }
+        const arg = typeof raw === 'string'
+          ? raw.replace(/\s+/g, ' ').trim().slice(0, 160)
+          : toolArg(raw)
         const id = call && call.id ? call.id : ''
         entries.push({
           at,
           name: String(fn.name),
-          arg: clip(arg || '', 80),
+          arg,
           state: (id && results.get(id)) || fallbackState(at),
           order: i
         })

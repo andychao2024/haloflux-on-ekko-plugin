@@ -83,6 +83,25 @@ export async function mount(root, ctx) {
     return value.length > max ? value.slice(-max) : value
   }
 
+  const TOOL_ARG_KEYS = ['command', 'file_path', 'path', 'pattern', 'query', 'url',
+    'prompt', 'description', 'session_id', 'sessionId', 'skill', 'tool', 'action', 'glob']
+
+  /** 与 docker 版一致：工具参数只显示最有代表性的一行，而不是整段 JSON。 */
+  function toolArgText(input) {
+    if (typeof input === 'string') return input.replace(/\s+/g, ' ').trim().slice(0, 160)
+    if (!input || typeof input !== 'object') return ''
+    let v = null
+    for (const key of TOOL_ARG_KEYS) {
+      if (typeof input[key] === 'string' && input[key].trim()) { v = input[key]; break }
+    }
+    if (v === null) {
+      for (const key of Object.keys(input)) {
+        if (typeof input[key] === 'string' && input[key].trim()) { v = input[key]; break }
+      }
+    }
+    return v === null ? '' : String(v).replace(/\s+/g, ' ').trim().slice(0, 160)
+  }
+
   function onLiveEvent(sessionId, meta, event) {
     const name = String((event && event.event) || '')
     const slot = liveSlot(sessionId, meta)
@@ -99,19 +118,26 @@ export async function mount(root, ctx) {
       return
     }
     if (name === 'tool.started' || name === 'tool.completed' || name === 'tool.failed') {
-      const toolName = event.name || event.tool || 'tool'
-      const arg = typeof event.preview === 'string' ? event.preview
-        : typeof event.arguments === 'string' ? event.arguments
-          : (event.arguments ? JSON.stringify(event.arguments) : '')
+      // Studio 的 SessionEvent 字段是 tool_name / args / tool_call_id；
+      // 兼容其他 Agent 可能使用的 name / arguments 形式。
+      const toolName = event.tool_name || event.name || event.tool || 'tool'
+      const callId = String(event.tool_call_id || event.id || '')
+      const rawArg = event.args !== undefined ? event.args
+        : (event.arguments !== undefined ? event.arguments : event.preview)
+      const arg = toolArgText(rawArg)
       slot.lastToolAt = Date.now(); slot.ts = Date.now(); slot.working = true
       if (name === 'tool.started') {
         liveToolCount += 1
-        liveTools.unshift({ at: Date.now(), ageSec: 0, agent: slot.agent, name: toolName, arg: clipText(arg, 80), state: 'running' })
+        liveTools.unshift({
+          at: Date.now(), ageSec: 0, agent: slot.agent, callId,
+          name: toolName, arg: clipText(arg, 160), state: 'running'
+        })
         while (liveTools.length > 8) liveTools.pop()
       } else {
         // 完成/失败要落到同一条调用上，面板才会从青色变为灰色/红色
-        const hit = liveTools.find((tool) =>
-          tool.name === toolName && tool.agent === slot.agent && tool.state === 'running')
+        const hit = (callId && liveTools.find((tool) => tool.callId === callId && tool.state === 'running')) ||
+          liveTools.find((tool) =>
+            tool.name === toolName && tool.agent === slot.agent && tool.state === 'running')
         if (hit) {
           hit.state = name === 'tool.failed' ? 'error' : 'done'
           hit.at = Date.now()

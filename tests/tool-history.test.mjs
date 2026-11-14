@@ -12,7 +12,7 @@ test('marks a call done and keeps its arguments when a result exists', () => {
   assert.equal(tools[0].name, 'Bash')
   assert.equal(tools[0].state, 'done')
   assert.equal(tools[0].at, 100000)
-  assert.match(tools[0].arg, /ls/)
+  assert.equal(tools[0].arg, 'ls')
 })
 
 test('marks error results red and in-flight calls running/idle by age', () => {
@@ -51,7 +51,7 @@ test('keeps only the newest 8 calls and parses stringified tool_calls', () => {
     tool_calls: JSON.stringify([{ function: { name: 'Read', arguments: { file_path: '/a' } } }])
   }])
   assert.equal(one[0].name, 'Read')
-  assert.match(one[0].arg, /file_path/)
+  assert.equal(one[0].arg, '/a')
 })
 
 test('falls back to tool messages without a matching call', () => {
