@@ -7,7 +7,7 @@ import { buildLegacyStats } from './src/legacy.mjs'
 import { parseToolMessages } from './src/tool-history.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.12'
+const VERSION = '0.8.13'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
