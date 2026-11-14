@@ -3,11 +3,10 @@ import { join } from 'node:path'
 import { assertContracts, registerRpc } from './sdk/harness/contracts.mjs'
 import { createStore } from './src/store.mjs'
 import { createMetrics } from './src/metrics.mjs'
-import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.1'
+const VERSION = '0.9.0'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -26,7 +25,6 @@ export function apply(ctx) {
   const startedAt = now()
   const store = createStore()
   const metrics = createMetrics()
-  const conns = createConnections({ host: ctx.host, store, log: ctx.log, max: 4 })
   const dumpDir = ctx.paths && ctx.paths.dataDir ? ctx.paths.dataDir : null
   let lastViewerAt = 0
   let usageBusy = false
@@ -44,21 +42,16 @@ export function apply(ctx) {
     try { writeFileSync(join(dumpDir, name), JSON.stringify(value, null, 2)) } catch (_) { /* ignore */ }
   }
 
-  async function pollSessions() {
+  let lastSessionsAt = 0
+  async function pollSessions(run) {
+    if (!run || now() - lastSessionsAt < 8000) return
+    lastSessionsAt = now()
     try {
-      const listed = await ctx.host.sessions.list({ limit: 2000 })
+      const listed = await run.host.sessions.list({ limit: 2000 })
       const list = Array.isArray(listed && listed.sessions) ? listed.sessions : []
       store.upsertSessions(list)
-      // 只有看板页面在请求数据时才建立实时连接；设置页/无人查看时保持完全安静，
-      // 避免连接状态变化反复刷新宿主里的插件快照。
-      if (!viewerActive(45000)) return
-      const t = Math.floor(now() / 1000)
-      for (const s of list) {
-        if (s.is_archived) continue
-        if (t - (Number(s.last_active) || 0) < 120) conns.ensure(s.id)
-      }
     } catch (error) {
-      ctx.log.warn('sessions poll failed', String((error && error.message) || error))
+      ctx.log.warn('sessions poll failed: ' + String((error && error.message) || error))
     }
   }
 
@@ -92,7 +85,6 @@ export function apply(ctx) {
   const rateDeltas = []         // { at, tok, out } 最近 90 秒
   let lastRateAt = 0
   const contextLimitBusy = new Set()
-  const backfillTried = new Set()
 
   async function pollRate(run) {
     if (rateBusy || !run || now() - lastRateTry < 2500) return
@@ -154,18 +146,12 @@ export function apply(ctx) {
     return now() - lastViewerAt < ms
   }
 
-  const sessionTimer = setInterval(pollSessions, SESSION_POLL_MS)
   const metricTimer = setInterval(() => { if (viewerActive()) metrics.sample() }, 2000)
-  const pruneTimer = setInterval(() => conns.prune(), 30000)
 
   ctx.lifecycle.add(() => {
-    clearInterval(sessionTimer)
     clearInterval(metricTimer)
-    clearInterval(pruneTimer)
-    conns.closeAll()
   })
 
-  pollSessions()
   metrics.sample()
 
 
@@ -191,7 +177,6 @@ export function apply(ctx) {
       version: VERSION,
       startedAt,
       uptimeSec: Math.round((now() - startedAt) / 1000),
-      connections: conns.size(),
       profiles: profiles || 'all'
     }
     snap.host = {
@@ -221,49 +206,21 @@ export function apply(ctx) {
     if (now() - store.usage.fetchedAt > 60000) await pollUsage(run)
     if (now() - store.skills.fetchedAt > 60000) await pollSkills(run)
     if (now() - lastRateAt > 2500) await pollRate(run)
+    await pollSessions(run)
     const snap = store.snapshot(profiles)
     if (snap.current && snap.current.model && (!snap.context || !snap.context.limit)) {
       const model = snap.current.model
       const provider = snap.current.provider || ''
       if (!contextLimitBusy.has(model)) {
         contextLimitBusy.add(model)
-        ctx.host.request('/api/studio/sessions/context-length', { query: { model, provider } })
+        run.host.request('/api/studio/sessions/context-length', { query: { model, provider } })
           .then((v) => { if (v && Number.isFinite(v.context_length)) store.setContextLimit(model, v.context_length) })
           .catch(() => {})
           .finally(() => contextLimitBusy.delete(model))
       }
     }
-    backfillRecent(run)
     return buildLegacyStats(snap, metrics.state, VERSION)
   })
-
-  function backfillRecent(run) {
-    if (!viewerActive(15000)) return
-    const t = Math.floor(now() / 1000)
-    const list = []
-    for (const s of store.sessions.values()) {
-      if (s.archived || backfillTried.has(s.id)) continue
-      if (!s.lastActive || t - s.lastActive > 86400) continue
-      list.push(s)
-    }
-    list.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))
-    for (const s of list.slice(0, 3)) {
-      if ((store.streams.get(s.id) || {}).reasoning) { backfillTried.add(s.id); continue }
-      backfillTried.add(s.id)
-      ctx.host.sessions.messages(s.id, { limit: 8 }).then((res) => {
-        const msgs = Array.isArray(res && res.messages) ? res.messages : []
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i]
-          if (!m || m.role !== 'assistant') continue
-          const text = m.reasoning_content || m.reasoning || m.content
-          if (text && String(text).trim()) {
-            store.backfillStream(s.id, String(text).trim().slice(-1200), Number(m.timestamp) * 1000)
-            break
-          }
-        }
-      }).catch(() => {})
-    }
-  }
 
   registerRpc(ctx, contract, 'get-settings', async (_input, run) => {
     const saved = (await run.state.user.namespace('haloflux').get('settings')) || {}

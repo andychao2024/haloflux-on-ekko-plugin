@@ -115,6 +115,190 @@ export async function mount(root, ctx) {
   root.innerHTML = parsed.body.innerHTML
   window.__hlSettings = { music: music }
 
+  // ---- 实时会话连接：放在页面端，使用当前查看者的身份与权限 ----
+  const live = new Map()          // sessionId -> { agent, profile, title, reasoning, text, ts, working, ... }
+  const handles = new Map()       // sessionId -> HostSession
+  const liveTools = []
+  const backfillTried = new Set()
+  let liveToolCount = 0
+  let liveEvent = null
+
+  function liveSlot(sessionId, meta) {
+    let slot = live.get(sessionId)
+    if (!slot) {
+      slot = {
+        sessionId,
+        agent: meta.agent || 'unknown',
+        profile: meta.profile || 'default',
+        title: meta.title || '',
+        reasoning: '', text: '', ts: 0,
+        working: false, workStartedAt: 0, lastToolAt: 0,
+        plan: null
+      }
+      live.set(sessionId, slot)
+    }
+    if (meta.agent) slot.agent = meta.agent
+    if (meta.title) slot.title = meta.title
+    return slot
+  }
+
+  function clipText(text, max) {
+    const value = String(text || '')
+    return value.length > max ? value.slice(-max) : value
+  }
+
+  function onLiveEvent(sessionId, meta, event) {
+    const name = String((event && event.event) || '')
+    const slot = liveSlot(sessionId, meta)
+    if (name === 'reasoning.delta' || name === 'thinking.delta' || name === 'interim.delta') {
+      slot.reasoning = clipText(slot.reasoning + String(event.delta || ''), 2400)
+      slot.ts = Date.now(); slot.working = true
+      liveEvent = { type: 'thinking', at: Date.now() }
+      return
+    }
+    if (name === 'message.delta') {
+      slot.text = clipText(slot.text + String(event.delta || ''), 2400)
+      slot.ts = Date.now(); slot.working = true
+      liveEvent = { type: 'message', at: Date.now() }
+      return
+    }
+    if (name === 'tool.started' || name === 'tool.completed' || name === 'tool.failed') {
+      const toolName = event.name || event.tool || 'tool'
+      const arg = typeof event.preview === 'string' ? event.preview
+        : typeof event.arguments === 'string' ? event.arguments
+          : (event.arguments ? JSON.stringify(event.arguments) : '')
+      slot.lastToolAt = Date.now(); slot.ts = Date.now(); slot.working = true
+      if (name === 'tool.started') {
+        liveToolCount += 1
+        liveTools.unshift({ at: Date.now(), ageSec: 0, agent: slot.agent, name: toolName, arg: clipText(arg, 80), state: 'started' })
+        while (liveTools.length > 20) liveTools.pop()
+      }
+      liveEvent = { type: 'tool', at: Date.now() }
+      return
+    }
+    if (name === 'run.started' || name === 'run.updated' || name === 'run.queued') {
+      slot.working = true; slot.ts = Date.now(); slot.workStartedAt = slot.workStartedAt || Date.now()
+      return
+    }
+    if (name === 'run.completed' || name === 'run.failed' || name === 'run.stopped') {
+      slot.working = false; slot.workStartedAt = 0; slot.ts = Date.now()
+      liveEvent = { type: name.replace('run.', ''), at: Date.now() }
+      return
+    }
+    if (name === 'plan.updated') {
+      slot.plan = event.task_plan || event.plan || slot.plan
+      return
+    }
+    if (name === 'resumed') {
+      slot.working = !!event.isWorking
+      slot.workStartedAt = slot.working ? Date.now() : 0
+      const plans = Array.isArray(event.taskPlans) ? event.taskPlans : []
+      if (plans[0]) slot.plan = plans[0]
+    }
+  }
+
+  async function ensureLive(sessions) {
+    if (!ctx.host || !ctx.host.sessions || typeof ctx.host.sessions.connect !== 'function') return
+    for (const meta of (sessions || []).slice(0, 4)) {
+      if (!meta || !meta.id || handles.has(meta.id)) continue
+      try {
+        const handle = await ctx.host.sessions.connect(meta.id, (event) => {
+          try { onLiveEvent(meta.id, meta, event) } catch (_) { /* ignore */ }
+        })
+        handles.set(meta.id, handle)
+        liveSlot(meta.id, meta)
+      } catch (_) { /* ignore */ }
+    }
+  }
+
+  function backfill(sessions) {
+    if (!ctx.host || !ctx.host.sessions || typeof ctx.host.sessions.messages !== 'function') return
+    for (const meta of (sessions || []).slice(0, 3)) {
+      if (!meta || !meta.id || backfillTried.has(meta.id)) continue
+      const slot = live.get(meta.id)
+      if (slot && (slot.reasoning || slot.text)) { backfillTried.add(meta.id); continue }
+      backfillTried.add(meta.id)
+      ctx.host.sessions.messages(meta.id, { limit: 8 }).then((res) => {
+        const plans = Array.isArray(res && res.taskPlans) ? res.taskPlans : []
+        if (plans[0]) liveSlot(meta.id, meta).plan = plans[0]
+        const messages = Array.isArray(res && res.messages) ? res.messages : []
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const message = messages[i]
+          if (!message || message.role !== 'assistant') continue
+          const text = message.reasoning_content || message.reasoning || message.content
+          if (text && String(text).trim()) {
+            const target = liveSlot(meta.id, meta)
+            if (!target.reasoning && !target.text) {
+              target.reasoning = clipText(String(text).trim(), 1200)
+              target.ts = Number(message.timestamp) * 1000 || Date.now()
+            }
+            break
+          }
+        }
+      }).catch(() => { /* ignore */ })
+    }
+  }
+
+  function planFromRaw(raw, slot) {
+    if (!raw || !Array.isArray(raw.plan)) return null
+    const steps = raw.plan.map((step) => ({ id: step.id, step: clipText(step.step || '', 120), status: step.status || 'pending' }))
+    const done = steps.filter((step) => step.status === 'completed').length
+    return {
+      agent: slot.agent, profile: slot.profile, sessionId: slot.sessionId, title: slot.title || null,
+      state: raw.execution_state || 'running', sessionActive: true,
+      done, total: steps.length, steps,
+      ts: raw.updated_at || Date.now(), ageSec: 0
+    }
+  }
+
+  function applyLive(d) {
+    if (!d || !d.ai) return d
+    const ai = d.ai
+    const liveAgents = new Set([...live.values()].map((slot) => slot.agent))
+    const baseStreams = (Array.isArray(ai.streams) ? ai.streams : [])
+      .filter((item) => !live.has(item.sessionId) && !liveAgents.has(item.agent))
+    const liveStreams = []
+    for (const slot of live.values()) {
+      if (!slot.reasoning && !slot.text && !slot.working) continue
+      const ageSec = slot.ts ? Math.max(0, Math.round((Date.now() - slot.ts) / 1000)) : null
+      liveStreams.push({
+        agent: slot.agent, profile: slot.profile, sessionId: slot.sessionId, title: slot.title,
+        text: clipText(slot.reasoning || slot.text, 1200),
+        kind: slot.reasoning ? 'think' : 'text',
+        state: slot.working ? 'live' : (ageSec !== null && ageSec < 180 ? 'active' : 'idle'),
+        working: slot.working ? 1 : 0,
+        workKind: slot.working && slot.lastToolAt && Date.now() - slot.lastToolAt < 15000 ? 'tool' : (slot.working ? 'model' : undefined),
+        workSec: slot.working && slot.workStartedAt ? Math.round((Date.now() - slot.workStartedAt) / 1000) : undefined,
+        ageSec, ts: slot.ts || null
+      })
+    }
+    const streams = liveStreams.concat(baseStreams)
+      .sort((a, b) => (b.working || 0) - (a.working || 0) || (b.ts || 0) - (a.ts || 0))
+      .slice(0, 10)
+    ai.streams = streams
+
+    const livePlans = []
+    for (const slot of live.values()) {
+      const plan = planFromRaw(slot.plan, slot)
+      if (plan) livePlans.push(plan)
+    }
+    if (livePlans.length) {
+      const basePlans = ((ai.taskPlan && ai.taskPlan.plans) || []).filter((plan) => !livePlans.some((item) => item.agent === plan.agent))
+      const plans = livePlans.concat(basePlans).slice(0, 10)
+      ai.taskPlan = Object.assign({}, plans[0], { plans })
+    }
+
+    if (liveTools.length) {
+      ai.recentTools = liveTools.slice(0, 8).concat(Array.isArray(ai.recentTools) ? ai.recentTools : []).slice(0, 8)
+      ai.toolCalls = Math.max(Number(ai.toolCalls) || 0, liveToolCount)
+    }
+    if (liveEvent) {
+      ai.lastEvent = liveEvent.type
+      ai.lastEventAgeSec = Math.max(0, Math.round((Date.now() - liveEvent.at) / 1000))
+    }
+    return d
+  }
+
   let statsBusy = false
   window.__hlBridge = {
     stats: async () => {
@@ -122,6 +306,11 @@ export async function mount(root, ctx) {
       statsBusy = true
       try {
         const data = await ctx.rpc.call('stats')
+        if (data) {
+          applyLive(data)
+          ensureLive(data.activeSessions)
+          backfill(data.activeSessions)
+        }
         window.__hlBridge.last = data
         return data
       } catch (_) {
@@ -143,6 +332,10 @@ export async function mount(root, ctx) {
   }
 
   ctx.lifecycle.add(() => {
+    for (const handle of handles.values()) {
+      try { if (handle && handle.close) handle.close() } catch (_) { /* ignore */ }
+    }
+    handles.clear()
     for (const node of injected) node.remove()
     try { root.innerHTML = '' } catch (_) { /* ignore */ }
     root.classList.remove('hl-root')

@@ -34,6 +34,7 @@ export function buildLegacyStats(snap, host, version) {
     net: host.net || null,
     uptimeSec: num(host.uptimeSec),
     link: { source: 'studio-plugin' },
+    activeSessions: Array.isArray(snap.activeSessions) ? snap.activeSessions : [],
     server: {
       version,
       cores: Array.isArray(host.cpuCores) ? host.cpuCores.length : 0,

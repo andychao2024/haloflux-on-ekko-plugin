@@ -278,6 +278,12 @@ export function createStore() {
       else if (current.model && contextLimits.get(current.model)) context = { tokens: null, limit: contextLimits.get(current.model) }
     }
 
+    const activeList = sess
+      .filter((s) => (s.lastActive && t - s.lastActive < 120))
+      .sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))
+      .slice(0, 8)
+      .map((s) => ({ id: s.id, agent: s.agent, profile: s.profile, title: s.title || '', lastActive: s.lastActive || 0 }))
+
     const agents = [...byAgent.values()].sort((a, b) =>
       (b.active ? 1 : 0) - (a.active ? 1 : 0) || b.lastActive - a.lastActive)
 
@@ -340,6 +346,7 @@ export function createStore() {
     return {
       at: now,
       totals,
+      activeSessions: activeList,
       current,
       context,
       usage: {
