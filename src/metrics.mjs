@@ -69,6 +69,7 @@ export function createMetrics() {
     ramDetail: null,
     disk: null,
     net: null,
+    gpu: null,
     uptimeSec: Math.round(os.uptime())
   }
   let prevCpu = null
@@ -120,6 +121,12 @@ export function createMetrics() {
         prevDisk = { ...rec, t: now }
       } else {
         state.disk = null
+      }
+
+      const gpuUtil = readText('/sys/class/misc/mali0/device/utilisation')
+      if (gpuUtil != null) {
+        const n = Number(String(gpuUtil).trim())
+        state.gpu = Number.isFinite(n) ? { utilization: Math.max(0, Math.min(100, n)), name: 'Mali GPU', source: 'mali-sysfs' } : null
       }
 
       const net = parseNetdev(readText('/proc/net/dev'))

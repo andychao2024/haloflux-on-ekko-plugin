@@ -18,6 +18,7 @@ export function buildLegacyStats(snap, host, version) {
   const events = Array.isArray(snap.events) ? snap.events : []
   const topAgent = agents[0] || {}
   const topStream = streams[0] || {}
+  const current = snap.current || {}
   const primary = plans[0] || null
   const running = plans.filter((p) => p.state === 'running')
   const active = agents.filter((a) => a.active)
@@ -28,7 +29,7 @@ export function buildLegacyStats(snap, host, version) {
     cpuName: host.cpuName || 'CPU',
     ram: num(host.ram),
     ramDetail: host.ramDetail || null,
-    gpu: null,
+    gpu: host.gpu || null,
     disk: host.disk ? Object.assign({ available: true }, host.disk) : null,
     net: host.net || null,
     uptimeSec: num(host.uptimeSec),
@@ -41,21 +42,21 @@ export function buildLegacyStats(snap, host, version) {
     ai: {
       source: 'ekko-studio',
       build: 'plugin',
-      sessionId: topStream.sessionId || null,
-      sessionTitle: topStream.title || topAgent.agent || null,
+      sessionId: current.id || topStream.sessionId || null,
+      sessionTitle: current.title || topStream.title || topAgent.agent || null,
       agent: topAgent.agent || null,
-      model: topAgent.model || topStream.model || null,
-      provider: topAgent.provider || null,
+      model: current.model || topAgent.model || topStream.model || null,
+      provider: current.provider || topAgent.provider || null,
       tokensPerSec: num(rate.tokensPerSec),
       outputTokensPerSec: num(rate.outputPerSec),
       cacheHitRate: num(rate.cacheHit),
-      contextTokens: null,
-      contextLimit: null,
-      tokensTotal: num(totals.tokens),
+      contextTokens: snap.context ? snap.context.tokens : null,
+      contextLimit: snap.context ? snap.context.limit : null,
+      tokensTotal: num((snap.totals || {}).tokens) ?? num(totals.tokens),
       todayTokens: num(today.tokens),
-      inputTokens: num(totals.input),
-      outputTokens: num(totals.output),
-      cacheReadTokens: num(totals.cacheRead),
+      inputTokens: num((snap.totals || {}).input) ?? num(totals.input),
+      outputTokens: num((snap.totals || {}).output) ?? num(totals.output),
+      cacheReadTokens: num((snap.totals || {}).cacheRead) ?? num(totals.cacheRead),
       activeAgents: active.length,
       agents: agents.map((a) => ({
         agent: a.agent,
@@ -69,13 +70,14 @@ export function buildLegacyStats(snap, host, version) {
         messages: a.messages,
         toolCalls: num(snap.toolCount) || 0,
         model: a.model || null,
+        provider: a.provider || null,
         title: null,
         lastActive: a.lastActive,
         active: !!a.active
       })),
       sessions: snap.sessions ? snap.sessions.total : null,
       toolCalls: num(snap.toolCount) || 0,
-      messages: agents.reduce((n, a) => n + (a.messages || 0), 0),
+      messages: num((snap.totals || {}).messages) ?? agents.reduce((n, a) => n + (a.messages || 0), 0),
       recentTools: tools.map((t) => ({
         agent: t.agent,
         name: t.name,

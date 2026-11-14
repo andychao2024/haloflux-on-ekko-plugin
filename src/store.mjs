@@ -20,6 +20,8 @@ export function createStore() {
   const usage = { today: null, daily: [], fetchedAt: 0, totals: null }
   const rate = { tokensPerSec: 0, outputPerSec: 0, cacheHit: 0, updatedAt: 0 }
   const skills = { current: null, top: [], fetchedAt: 0 }
+  const sessionUsage = new Map()
+  const contextLimits = new Map()
 
   function upsertSessions(list) {
     const seen = new Set()
@@ -41,6 +43,7 @@ export function createStore() {
         inputTokens: Number(item.input_tokens) || 0,
         outputTokens: Number(item.output_tokens) || 0,
         cacheRead: Number(item.cache_read_tokens) || 0,
+        cacheWrite: Number(item.cache_write_tokens) || 0,
         archived: !!item.is_archived
       })
     }
@@ -184,6 +187,29 @@ export function createStore() {
     usage.fetchedAt = Date.now()
   }
 
+  function backfillStream(sessionId, text, ts) {
+    if (!text) return
+    const st = streamFor(sessionId)
+    if (st.reasoning) return
+    st.reasoning = clip(text)
+    st.ts = ts || st.ts
+    st.backfilled = true
+  }
+
+  function setSessionUsage(id, row) {
+    if (!id || !row) return
+    sessionUsage.set(id, {
+      input: Number(row.input_tokens) || 0,
+      output: Number(row.output_tokens) || 0,
+      cacheRead: Number(row.cache_read_tokens) || 0
+    })
+  }
+
+  function setContextLimit(model, limit) {
+    if (!model || !Number.isFinite(limit)) return
+    contextLimits.set(model, Math.round(limit))
+  }
+
   function setRate(next) {
     Object.assign(rate, next, { updatedAt: Date.now() })
   }
@@ -211,16 +237,47 @@ export function createStore() {
     for (const s of sess) {
       const agg = byAgent.get(s.agent) || {
         agent: s.agent, profile: s.profile, sessions: 0, tokens: 0,
-        messages: 0, lastActive: 0, model: s.model || null, active: false
+        messages: 0, lastActive: 0, model: s.model || null,
+        provider: s.provider || null, active: false
       }
       agg.sessions += 1
-      agg.tokens += (s.inputTokens || 0) + (s.outputTokens || 0) + (s.cacheRead || 0)
+      agg.tokens += (s.inputTokens || 0) + (s.outputTokens || 0) + (s.cacheRead || 0) + (s.cacheWrite || 0)
       agg.messages += s.messageCount || 0
       agg.lastActive = Math.max(agg.lastActive, s.lastActive || 0)
       agg.model = agg.model || s.model || null
+      agg.provider = agg.provider || s.provider || null
       agg.active = agg.active || t - (s.lastActive || 0) < ACTIVE_SEC || !!((streams.get(s.id) || {}).working)
       byAgent.set(s.agent, agg)
     }
+    const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, messages: 0 }
+    for (const s of sess) {
+      totals.input += s.inputTokens || 0
+      totals.output += s.outputTokens || 0
+      totals.cacheRead += s.cacheRead || 0
+      totals.cacheWrite += s.cacheWrite || 0
+      totals.messages += s.messageCount || 0
+    }
+    totals.tokens = totals.input + totals.output + totals.cacheRead + totals.cacheWrite
+
+    let current = null
+    for (const s of sess) {
+      if (!s.lastActive) continue
+      if (!current || s.lastActive > current.lastActive) {
+        current = {
+          id: s.id, title: s.title || '', agent: s.agent,
+          model: s.model || null, provider: s.provider || null,
+          lastActive: s.lastActive
+        }
+      }
+    }
+
+    let context = null
+    if (current) {
+      const row = sessionUsage.get(current.id)
+      if (row) context = { tokens: row.input + row.cacheRead, limit: current.model ? (contextLimits.get(current.model) || null) : null }
+      else if (current.model && contextLimits.get(current.model)) context = { tokens: null, limit: contextLimits.get(current.model) }
+    }
+
     const agents = [...byAgent.values()].sort((a, b) =>
       (b.active ? 1 : 0) - (a.active ? 1 : 0) || b.lastActive - a.lastActive)
 
@@ -282,6 +339,9 @@ export function createStore() {
 
     return {
       at: now,
+      totals,
+      current,
+      context,
       usage: {
         today: usage.today,
         totals: usage.totals,
@@ -303,6 +363,6 @@ export function createStore() {
   return {
     sessions, streams, plans, tools, events, usage, skills,
     upsertSessions, streamFor, appendDelta, setWorking, noteTool, setPlan,
-    addEvent, setUsage, setRate, setSkills, snapshot
+    addEvent, setUsage, setRate, setSkills, setSessionUsage, setContextLimit, backfillStream, snapshot
   }
 }

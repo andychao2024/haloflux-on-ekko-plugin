@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.7.7'
+const VERSION = '0.8.0'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -46,7 +46,7 @@ export function apply(ctx) {
 
   async function pollSessions() {
     try {
-      const listed = await ctx.host.sessions.list({ limit: 200 })
+      const listed = await ctx.host.sessions.list({ limit: 2000 })
       const list = Array.isArray(listed && listed.sessions) ? listed.sessions : []
       store.upsertSessions(list)
       // 只有看板页面在请求数据时才建立实时连接；设置页/无人查看时保持完全安静，
@@ -91,6 +91,8 @@ export function apply(ctx) {
   const prevUsage = new Map()   // sessionId -> { tok, out }
   const rateDeltas = []         // { at, tok, out } 最近 90 秒
   let lastRateAt = 0
+  const contextLimitBusy = new Set()
+  const backfillTried = new Set()
 
   async function pollRate(run) {
     if (rateBusy || !run || now() - lastRateTry < 2500) return
@@ -113,6 +115,7 @@ export function apply(ctx) {
       for (const id of ids) {
         const row = data && data[id]
         if (!row) continue
+        store.setSessionUsage(id, row)
         const tok = (row.input_tokens || 0) + (row.output_tokens || 0) + (row.cache_read_tokens || 0)
         const out = (row.output_tokens || 0)
         const prev = prevUsage.get(id)
@@ -218,8 +221,48 @@ export function apply(ctx) {
     if (now() - store.skills.fetchedAt > 60000) pollSkills(run)
     if (now() - lastRateAt > 2500) pollRate(run)
     const snap = store.snapshot(profiles)
+    if (snap.current && snap.current.model && (!snap.context || !snap.context.limit)) {
+      const model = snap.current.model
+      const provider = snap.current.provider || ''
+      if (!contextLimitBusy.has(model)) {
+        contextLimitBusy.add(model)
+        run.host.request('/api/studio/sessions/context-length', { query: { model, provider } })
+          .then((v) => { if (v && Number.isFinite(v.context_length)) store.setContextLimit(model, v.context_length) })
+          .catch(() => {})
+          .finally(() => contextLimitBusy.delete(model))
+      }
+    }
+    backfillRecent(run)
     return buildLegacyStats(snap, metrics.state, VERSION)
   })
+
+  function backfillRecent(run) {
+    if (!viewerActive(15000)) return
+    const t = Math.floor(now() / 1000)
+    const list = []
+    for (const s of store.sessions.values()) {
+      if (s.archived || backfillTried.has(s.id)) continue
+      if (!s.lastActive || t - s.lastActive > 86400) continue
+      list.push(s)
+    }
+    list.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))
+    for (const s of list.slice(0, 3)) {
+      if ((store.streams.get(s.id) || {}).reasoning) { backfillTried.add(s.id); continue }
+      backfillTried.add(s.id)
+      run.host.sessions.messages(s.id, { limit: 8 }).then((res) => {
+        const msgs = Array.isArray(res && res.messages) ? res.messages : []
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i]
+          if (!m || m.role !== 'assistant') continue
+          const text = m.reasoning_content || m.reasoning || m.content
+          if (text && String(text).trim()) {
+            store.backfillStream(s.id, String(text).trim().slice(-1200), Number(m.timestamp) * 1000)
+            break
+          }
+        }
+      }).catch(() => {})
+    }
+  }
 
   registerRpc(ctx, contract, 'get-settings', async (_input, run) => {
     const saved = (await run.state.user.namespace('haloflux').get('settings')) || {}
