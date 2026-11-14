@@ -10,7 +10,6 @@ const PAGE_HTML = "<!doctype html>\n<!--\n  HALOFLUX - Copyright (c) 2026 Ryder1
  */
 
 export async function mount(root, ctx) {
-  try { ctx.rpc.call(ctx.view === 'settings' ? 'note-settings' : 'note-dashboard').catch(() => {}) } catch (_) {}
   if (ctx.view === 'settings') return mountSettings(root, ctx)
 
   const settings = await ctx.rpc.call('get-settings').catch(() => ({ anim: true, fps: 30, display: 'iframe', url: '' }))
@@ -176,11 +175,8 @@ function mountSettings(root, ctx) {
   const displaySel = wrap.querySelector('#hls-display')
   const compatBox = wrap.querySelector('#hls-compat')
   const msg = wrap.querySelector('#hls-msg')
-  ctx.rpc.call('get-settings').then((s) => {
-    animBox.checked = !(s && s.anim === false)
-    displaySel.value = s && s.display === 'link' ? 'link' : 'iframe'
-    compatBox.checked = !!(s && s.compat)
-  }).catch(() => { animBox.checked = true; displaySel.value = 'iframe' })
+  animBox.checked = true
+  displaySel.value = 'iframe'
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
       await ctx.rpc.call('save-settings', {
