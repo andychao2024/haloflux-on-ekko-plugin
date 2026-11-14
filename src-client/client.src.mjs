@@ -13,7 +13,6 @@ export async function mount(root, ctx) {
   const settings = await ctx.rpc.call('get-settings').catch(() => ({ anim: true, fps: 30, display: 'iframe', url: '' }))
   const anim = !(settings && settings.anim === false)
   const display = settings && settings.display === 'link' ? 'link' : 'iframe'
-  const url = (settings && typeof settings.url === 'string') ? settings.url.trim() : ''
   const compat = !!(settings && settings.compat)
 
   const style = document.createElement('style')
@@ -35,55 +34,78 @@ export async function mount(root, ctx) {
   root.classList.add('hl-root')
 
   if (display === 'link') {
+    const path = (ctx.location && ctx.location.path) || '/studio/plugins/haloflux-ai-link/dashboard'
+    const target = location.origin + '/#' + path
     const box = document.createElement('div')
     box.className = 'hl-link'
     box.innerHTML = `<b>HALOFLUX AI LINK</b>
-      <div>当前设置为「打开新链接」。</div>
-      ${url ? `<code>${url.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</code>
-      <button id="hl-open">打开看板</button>` : '<div>还没有填写地址，请在「设置」里配置。</div>'}
-      <div style="color:#6f747c;font-size:11px">新链接会在浏览器新标签页打开，不在 Studio 内。</div>`
+      <div>当前设置为「新链接模式」：在新标签页打开插件自己的看板。</div>
+      <code>${target.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</code>
+      <button id="hl-open">在新标签页打开</button>
+      <button id="hl-copy">复制地址</button>
+      <div style="color:#6f747c;font-size:11px">数据仍来自当前 Studio 账号，不使用 docker 服务，也不需要令牌。</div>`
     root.append(box)
-    const btn = box.querySelector('#hl-open')
-    if (btn) btn.onclick = () => { window.open(url, '_blank', 'noopener,noreferrer') }
+    const open = () => { window.open(target, '_blank', 'noopener,noreferrer') }
+    box.querySelector('#hl-open').onclick = open
+    box.querySelector('#hl-copy').onclick = async () => {
+      try { await navigator.clipboard.writeText(target); ctx.ui.notify('地址已复制', 'success') }
+      catch (_) { ctx.ui.notify('复制失败，请手动选择地址', 'error') }
+    }
     ctx.lifecycle.add(() => { box.remove(); root.classList.remove('hl-root') })
     return
   }
 
-  const frame = document.createElement('iframe')
-  frame.className = 'hl-frame'
-  frame.setAttribute('title', 'HALOFLUX AI LINK')
-  frame.setAttribute('sandbox', 'allow-scripts allow-same-origin')
-  frame.srcdoc = PAGE_HTML
-  root.append(frame)
+  // 直接把原版页面注入当前文档：不再套一层子 iframe（Big Sur / 手机上
+  // 嵌套 iframe 与 canvas 合成容易整页闪烁），同时页面拿到完整的 100vh。
+  const parsed = new DOMParser().parseFromString(PAGE_HTML, 'text/html')
+  const scripts = [...parsed.body.querySelectorAll('script')].map((el) => el.textContent)
+  parsed.body.querySelectorAll('script').forEach((el) => el.remove())
 
-  function post(message) {
-    try { frame.contentWindow.postMessage(message, '*') } catch (_) { /* ignore */ }
+  const injected = []
+  for (const node of parsed.head.querySelectorAll('style,meta[name="viewport"]')) {
+    const clone = node.cloneNode(true)
+    document.head.appendChild(clone)
+    injected.push(clone)
   }
+  if (parsed.title) document.title = parsed.title
+  document.documentElement.lang = parsed.documentElement.lang || 'zh-CN'
+  document.documentElement.className = parsed.documentElement.className || ''
 
-  function pushSettings() {
-    post({ __hl: 'settings', value: { anim, compat } })
-  }
+  root.classList.remove('hl-root')
+  root.innerHTML = ''
+  document.body.className = parsed.body.className || ''
+  document.body.innerHTML = parsed.body.innerHTML
 
-  async function onMessage(event) {
-    if (event.source && event.source !== frame.contentWindow) return
-    const message = event.data || {}
-    if (message.__hl === 'ready') {
-      pushSettings()
-      return
+  let statsBusy = false
+  window.__hlBridge = {
+    stats: async () => {
+      if (statsBusy) return window.__hlBridge.last || null
+      statsBusy = true
+      try {
+        const data = await ctx.rpc.call('stats')
+        window.__hlBridge.last = data
+        return data
+      } catch (_) {
+        return null
+      } finally {
+        statsBusy = false
+      }
     }
-    if (message.__hl === 'stats-request') {
-      let data = null
-      try { data = await ctx.rpc.call('stats') } catch (_) { data = null }
-      post({ __hl: 'stats-result', id: message.id, data })
-    }
   }
 
-  window.addEventListener('message', onMessage)
+  for (const code of scripts) {
+    const el = document.createElement('script')
+    el.textContent = code
+    document.body.appendChild(el)
+  }
+
+  if (typeof window.__hlApplySettings === 'function') {
+    window.__hlApplySettings({ anim, compat })
+  }
+
   ctx.lifecycle.add(() => {
-    window.removeEventListener('message', onMessage)
-    frame.remove()
-    style.remove()
-    root.classList.remove('hl-root')
+    for (const node of injected) node.remove()
+    try { document.body.innerHTML = '' } catch (_) { /* ignore */ }
   })
 }
 
@@ -107,11 +129,8 @@ function mountSettings(root, ctx) {
     <label>显示方式
       <select id="hls-display">
         <option value="iframe">iframe 内嵌（Studio 内直接显示）</option>
-        <option value="link">打开新链接（浏览器新标签页）</option>
+        <option value="link">新链接模式（新标签页打开插件看板）</option>
       </select>
-    </label>
-    <label>新链接地址
-      <input id="hls-url" type="text" placeholder="https://.../?k=..." style="flex:1;min-width:320px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.2)">
     </label>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式）</label>
     <label><input type="checkbox" id="hls-compat"> 兼容模式（Big Sur / 旧显卡：DPR=1，关闭 will-change）</label>
@@ -127,13 +146,11 @@ function mountSettings(root, ctx) {
   root.append(wrap)
   const animBox = wrap.querySelector('#hls-anim')
   const displaySel = wrap.querySelector('#hls-display')
-  const urlInput = wrap.querySelector('#hls-url')
   const compatBox = wrap.querySelector('#hls-compat')
   const msg = wrap.querySelector('#hls-msg')
   ctx.rpc.call('get-settings').then((s) => {
     animBox.checked = !(s && s.anim === false)
     displaySel.value = s && s.display === 'link' ? 'link' : 'iframe'
-    urlInput.value = (s && s.url) || ''
     compatBox.checked = !!(s && s.compat)
   }).catch(() => { animBox.checked = true; displaySel.value = 'iframe' })
   wrap.querySelector('#hls-save').onclick = async () => {
@@ -141,7 +158,6 @@ function mountSettings(root, ctx) {
       await ctx.rpc.call('save-settings', {
         anim: !!animBox.checked,
         display: displaySel.value === 'link' ? 'link' : 'iframe',
-        url: urlInput.value.trim(),
         compat: !!compatBox.checked
       })
       msg.textContent = '已保存，重新打开看板生效'

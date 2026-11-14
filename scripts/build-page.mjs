@@ -82,6 +82,9 @@ const shim = `
   });
   document.addEventListener('visibilitychange', function () { applySettings(settings); });
   function requestStats() {
+    if (window.__hlBridge && typeof window.__hlBridge.stats === 'function') {
+      return Promise.resolve(window.__hlBridge.stats());
+    }
     return new Promise(function (resolve) {
       var id = ++seq;
       pending[id] = resolve;
