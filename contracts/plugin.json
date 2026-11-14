@@ -32,12 +32,18 @@
         "compat": {
           "type": "boolean",
           "description": "兼容模式：DPR 固定 1、禁用 will-change，缓解旧显卡闪烁；默认 false。"
+        },
+        "title": {
+          "type": "string",
+          "description": "看板左上角标题；空字符串使用默认标题。",
+          "maxLength": 80
         }
       },
       "required": [
         "anim",
         "display",
-        "compat"
+        "compat",
+        "title"
       ],
       "additionalProperties": false
     },

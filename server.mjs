@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.7.3'
+const VERSION = '0.7.4'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -223,7 +223,8 @@ export function apply(ctx) {
     return {
       anim: saved.anim !== false,
       display: saved.display === 'link' ? 'link' : 'iframe',
-      compat: !!saved.compat
+      compat: !!saved.compat,
+      title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : ''
     }
   })
 
@@ -231,7 +232,8 @@ export function apply(ctx) {
     await run.state.user.namespace('haloflux').set('settings', {
       anim: input.anim !== false,
       display: input.display === 'link' ? 'link' : 'iframe',
-      compat: !!input.compat
+      compat: !!input.compat,
+      title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : ''
     })
     return { ok: true }
   })

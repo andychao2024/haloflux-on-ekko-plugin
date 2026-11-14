@@ -7,6 +7,15 @@
  *   3. 下发动效开关与帧率设置
  */
 
+function pageWithTitle(html, title) {
+  const clean = String(title || '').trim()
+  if (!clean) return html
+  const safe = clean.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]))
+  return html.replace(/<h1>[^<]*<\/h1>/, '<h1>' + safe + '</h1>')
+}
+
 export async function mount(root, ctx) {
   if (ctx.view === 'settings') return mountSettings(root, ctx)
 
@@ -14,6 +23,7 @@ export async function mount(root, ctx) {
   const anim = !(settings && settings.anim === false)
   const display = settings && settings.display === 'link' ? 'link' : 'iframe'
   const compat = !!(settings && settings.compat)
+  const title = (settings && typeof settings.title === 'string') ? settings.title.trim() : ''
 
   const style = document.createElement('style')
   style.textContent = `
@@ -60,7 +70,7 @@ export async function mount(root, ctx) {
     const open = () => {
       const win = window.open('', '_blank')
       if (!win) { ctx.ui.notify('浏览器拦截了新窗口，请允许弹窗后重试', 'error'); return }
-      const html = PAGE_HTML.replace('<head>', '<head>' + bridgeScript)
+      const html = pageWithTitle(PAGE_HTML, title).replace('<head>', '<head>' + bridgeScript)
       win.document.open()
       win.document.write(html)
       win.document.close()
@@ -86,7 +96,7 @@ export async function mount(root, ctx) {
 
   // 把原版页面挂到插件提供的 root 节点里（不要替换 document.body：
   // Studio 的插件宿主需要保留自己的根节点，替换会触发宿主重排/重挂载）。
-  const parsed = new DOMParser().parseFromString(PAGE_HTML, 'text/html')
+  const parsed = new DOMParser().parseFromString(pageWithTitle(PAGE_HTML, title), 'text/html')
   const scripts = [...parsed.body.querySelectorAll('script')].map((el) => el.textContent)
   parsed.body.querySelectorAll('script').forEach((el) => el.remove())
 
@@ -151,6 +161,10 @@ function mountSettings(root, ctx) {
   wrap.className = 'hls'
   wrap.innerHTML = `
     <h2>HALOFLUX AI LINK · 设置</h2>
+    <label>看板标题
+      <input id="hls-title" type="text" maxlength="80" placeholder="Ekko Studio / Rock5 ITX RK3588"
+        style="flex:1;min-width:280px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.2)">
+    </label>
     <label>显示方式
       <select id="hls-display">
         <option value="iframe">iframe 内嵌（Studio 内直接显示）</option>
@@ -172,18 +186,21 @@ function mountSettings(root, ctx) {
   const animBox = wrap.querySelector('#hls-anim')
   const displaySel = wrap.querySelector('#hls-display')
   const compatBox = wrap.querySelector('#hls-compat')
+  const titleInput = wrap.querySelector('#hls-title')
   const msg = wrap.querySelector('#hls-msg')
   ctx.rpc.call('get-settings').then((s) => {
     animBox.checked = !(s && s.anim === false)
     displaySel.value = s && s.display === 'link' ? 'link' : 'iframe'
     compatBox.checked = !!(s && s.compat)
+    titleInput.value = (s && s.title) || ''
   }).catch(() => { animBox.checked = true; displaySel.value = 'iframe' })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
       await ctx.rpc.call('save-settings', {
         anim: !!animBox.checked,
         display: displaySel.value === 'link' ? 'link' : 'iframe',
-        compat: !!compatBox.checked
+        compat: !!compatBox.checked,
+        title: titleInput.value.trim()
       })
       msg.textContent = '已保存，重新打开看板生效'
     } catch (error) {
