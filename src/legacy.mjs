@@ -94,21 +94,25 @@ export function buildLegacyStats(snap, host, version) {
         lastAt: null
       })),
       daily: (usage.daily || []).map((d) => ({ date: d.date, tokens: d.tokens, sessions: 0 })),
-      streams: streams.map((s) => ({
-        agent: s.agent,
-        profile: s.profile,
-        text: s.text,
-        kind: s.kind,
-        state: s.state,
-        working: s.working,
-        workKind: s.workKind,
-        workSec: s.workSec,
-        pendingSec: null,
-        ageSec: s.ageSec,
-        sessionId: s.sessionId,
-        title: s.title,
-        ts: s.ts
-      })),
+      streams: streams.map((s) => {
+        const item = {
+          agent: s.agent,
+          profile: s.profile,
+          text: s.text,
+          kind: s.kind,
+          state: s.state,
+          working: s.working,
+          pendingSec: null,
+          ageSec: s.ageSec,
+          sessionId: s.sessionId,
+          title: s.title,
+          ts: s.ts
+        }
+        // 可选字段不能是 undefined：SDK 会拒绝整份 JSON
+        if (s.workKind) item.workKind = s.workKind
+        if (typeof s.workSec === 'number') item.workSec = s.workSec
+        return item
+      }),
       pendingAgents: [],
       pendingSec: null,
       planActive: running.length > 0,

@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.7.6'
+const VERSION = '0.7.7'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -209,11 +209,14 @@ export function apply(ctx) {
 
   registerRpc(ctx, contract, 'stats', async (_input, run) => {
     lastViewerAt = now()
-    const role = await roleOf(run)
-    const profiles = role === 'super_admin' ? null : [run.identity.profile || 'default']
-    if (now() - store.usage.fetchedAt > 60000) await pollUsage(run)
-    if (now() - store.skills.fetchedAt > 60000) await pollSkills(run)
-    if (now() - lastRateAt > 2500) await pollRate(run)
+    const role = roleCache.has(run.identity.userId) ? roleOf(run) : null
+    if (!roleCache.has(run.identity.userId)) roleOf(run).catch(() => {})
+    const resolved = role && role.then ? await role : role
+    const profiles = resolved === 'super_admin' ? null : [run.identity.profile || 'default']
+    // 不在 RPC 路径里等待轮询：先返回缓存，避免超过 ai-link 的 2.6 秒请求超时
+    if (now() - store.usage.fetchedAt > 60000) pollUsage(run)
+    if (now() - store.skills.fetchedAt > 60000) pollSkills(run)
+    if (now() - lastRateAt > 2500) pollRate(run)
     const snap = store.snapshot(profiles)
     return buildLegacyStats(snap, metrics.state, VERSION)
   })
