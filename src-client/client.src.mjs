@@ -279,6 +279,16 @@ export async function mount(root, ctx) {
     window.__hlApplySettings({ anim, compat })
   }
 
+  // 音乐：页面自带的 BGM 模块初始化时只会读 localStorage。这里在脚本执行完
+  // 再按插件设置同步一次，避免“设置里已开启但页面仍按旧值静音”。
+  // 浏览器拦截自动播放时，模块会挂起并在下一次点击页面时真正播放。
+  try {
+    if (window.__bgm) {
+      if (typeof window.__bgm.setVol === 'function') window.__bgm.setVol(60)
+      if (typeof window.__bgm.set === 'function') window.__bgm.set(music)
+    }
+  } catch (_) { /* ignore */ }
+
   ctx.lifecycle.add(() => {
     for (const handle of handles.values()) {
       try { if (handle && handle.close) handle.close() } catch (_) { /* ignore */ }

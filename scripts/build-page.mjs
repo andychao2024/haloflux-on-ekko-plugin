@@ -160,9 +160,12 @@ const control = `
 
 let out = html
   .replace(/<audio id="bgmAudio"[^>]*><\/audio>/, bgm
-    ? '<audio id="bgmAudio" data-src="' + bgm + '" loop playsinline></audio>'
-    : '<audio id="bgmAudio" loop playsinline></audio>')
-  .replace('<script src="wp.js"></script>', `<script>${escapeScript(wp)}</script>\n<script>${escapeScript(shim)}</script>\n<script>${escapeScript(control)}</script>`)
+    ? '<audio id="bgmAudio" data-src="' + bgm + '" loop preload="auto" playsinline></audio>'
+    : '<audio id="bgmAudio" loop preload="auto" playsinline></audio>')
+  // 数据桥必须放在页面自带 BGM 脚本之前：BGM 在初始化时读取 localStorage，
+  // 晚注入就会读到旧状态（设置里开了音乐却没声音）。
+  .replace(/<body([^>]*)>/, `<body$1>\n<script>${escapeScript(shim)}</script>\n<script>${escapeScript(control)}</script>`)
+  .replace('<script src="wp.js"></script>', `<script>${escapeScript(wp)}</script>`)
   .replace(/<script src="ai-link\.js[^"]*"><\/script>/, `<script>${escapeScript(aiPatched)}</script>`)
 
 out = out.replace('</head>', `<style>
