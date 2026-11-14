@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.6.9'
+const VERSION = '0.7.0'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -165,16 +165,6 @@ export function apply(ctx) {
   pollSessions()
   metrics.sample()
 
-  // P1 自检：无人打开页面时也落一份快照，便于开发期核对（发布前移除）
-  const selfDumpTimer = setTimeout(() => {
-    try {
-      const snap = store.snapshot(null)
-      snap.host = metrics.state
-      snap.server = { version: VERSION, connections: conns.size(), selfCheck: true }
-      writeDump('snapshot-self.json', snap)
-    } catch (_) { /* ignore */ }
-  }, 6000)
-  ctx.lifecycle.add(() => clearTimeout(selfDumpTimer))
 
   async function roleOf(run) {
     const uid = run.identity.userId
@@ -214,7 +204,6 @@ export function apply(ctx) {
     if (now() - store.usage.fetchedAt > 60000) pollUsage(run)
     if (now() - store.skills.fetchedAt > 60000) pollSkills(run)
     if (now() - lastRateAt > 2500) pollRate(run)
-    writeDump('snapshot.json', snap)
     return snap
   })
 
@@ -228,16 +217,6 @@ export function apply(ctx) {
     const snap = store.snapshot(profiles)
     return buildLegacyStats(snap, metrics.state, VERSION)
   })
-
-  const noteMount = (kind) => {
-    if (!dumpDir) return
-    try {
-      const line = new Date().toISOString() + ' ' + kind + '\n'
-      appendFileSync(join(dumpDir, 'mounts.log'), line)
-    } catch (_) { /* ignore */ }
-  }
-  registerRpc(ctx, contract, 'note-dashboard', async () => { noteMount('dashboard'); return null })
-  registerRpc(ctx, contract, 'note-settings', async () => { noteMount('settings'); return null })
 
   registerRpc(ctx, contract, 'get-settings', async (_input, run) => {
     const saved = (await run.state.user.namespace('haloflux').get('settings')) || {}
