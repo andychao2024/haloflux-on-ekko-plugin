@@ -168,6 +168,8 @@ let out = html
   .replace('<script src="wp.js"></script>', `<script>${escapeScript(wp)}</script>`)
   .replace(/<script src="ai-link\.js[^"]*"><\/script>/, `<script>${escapeScript(aiPatched)}</script>`)
 
+out = out.replace(/<title>[^<]*<\/title>/, '<title>HALOFLUX ON Ekko</title>')
+
 out = out.replace('</head>', `<style>
 /* 插件内只做两件最小改动，其余布局/动效/卡片尺寸与 docker 版完全一致：
    1. 背景色对齐页面自身 --bg
