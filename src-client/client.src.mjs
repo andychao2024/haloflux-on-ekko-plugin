@@ -10,18 +10,44 @@
 export async function mount(root, ctx) {
   if (ctx.view === 'settings') return mountSettings(root, ctx)
 
-  const settings = await ctx.rpc.call('get-settings').catch(() => ({ anim: true, fps: 30 }))
+  const settings = await ctx.rpc.call('get-settings').catch(() => ({ anim: true, fps: 30, display: 'iframe', url: '' }))
   const anim = !(settings && settings.anim === false)
   const fps = settings && settings.fps === 60 ? 60 : 30
+  const display = settings && settings.display === 'link' ? 'link' : 'iframe'
+  const url = (settings && typeof settings.url === 'string') ? settings.url.trim() : ''
 
   const style = document.createElement('style')
   style.textContent = `
-    .hl-root { position:relative; height:100%; overflow:hidden; background:#05070a; }
+    .hl-root { position:fixed; inset:0; height:auto; width:auto; overflow:hidden; background:#05070a; z-index:0; }
+    .hl-link { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+      gap:14px; padding:28px; color:#cfd3db; font:13px/1.6 ui-monospace,Consolas,monospace; text-align:center;
+      background:radial-gradient(circle at 50% 30%, #10161a, #05070a 70%); }
+    .hl-link b { font-size:16px; color:#98e0cf; letter-spacing:.6px; }
+    .hl-link code { max-width:80%; padding:6px 10px; border-radius:6px; background:rgba(255,255,255,.07);
+      color:#9aa0aa; word-break:break-all; font-size:11px; }
+    .hl-link button { font:inherit; padding:7px 16px; border-radius:6px; border:1px solid rgba(152,224,207,.45);
+      background:rgba(152,224,207,.1); color:#dff6ef; cursor:pointer; }
+    .hl-link button:hover { background:rgba(152,224,207,.18); }
     .hl-frame { position:absolute; inset:0; width:100%; height:100%; border:0; background:#05070a; }
 
   `
   root.append(style)
   root.classList.add('hl-root')
+
+  if (display === 'link') {
+    const box = document.createElement('div')
+    box.className = 'hl-link'
+    box.innerHTML = `<b>HALOFLUX AI LINK</b>
+      <div>当前设置为「打开新链接」。</div>
+      ${url ? `<code>${url.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</code>
+      <button id="hl-open">打开看板</button>` : '<div>还没有填写地址，请在「设置」里配置。</div>'}
+      <div style="color:#6f747c;font-size:11px">新链接会在浏览器新标签页打开，不在 Studio 内。</div>`
+    root.append(box)
+    const btn = box.querySelector('#hl-open')
+    if (btn) btn.onclick = () => { window.open(url, '_blank', 'noopener,noreferrer') }
+    ctx.lifecycle.add(() => { box.remove(); root.classList.remove('hl-root') })
+    return
+  }
 
   const frame = document.createElement('iframe')
   frame.className = 'hl-frame'
@@ -78,7 +104,16 @@ function mountSettings(root, ctx) {
   wrap.className = 'hls'
   wrap.innerHTML = `
     <h2>HALOFLUX AI LINK · 设置</h2>
-    <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台</label>
+    <label>显示方式
+      <select id="hls-display">
+        <option value="iframe">iframe 内嵌（Studio 内直接显示）</option>
+        <option value="link">打开新链接（浏览器新标签页）</option>
+      </select>
+    </label>
+    <label>新链接地址
+      <input id="hls-url" type="text" placeholder="https://.../?k=..." style="flex:1;min-width:320px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.2)">
+    </label>
+    <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式）</label>
     <label>舞台帧率
       <select id="hls-fps">
         <option value="30">30 FPS（省电）</option>
@@ -97,16 +132,22 @@ function mountSettings(root, ctx) {
   root.append(wrap)
   const animBox = wrap.querySelector('#hls-anim')
   const fpsSel = wrap.querySelector('#hls-fps')
+  const displaySel = wrap.querySelector('#hls-display')
+  const urlInput = wrap.querySelector('#hls-url')
   const msg = wrap.querySelector('#hls-msg')
   ctx.rpc.call('get-settings').then((s) => {
     animBox.checked = !(s && s.anim === false)
     fpsSel.value = s && s.fps === 60 ? '60' : '30'
-  }).catch(() => { animBox.checked = true; fpsSel.value = '30' })
+    displaySel.value = s && s.display === 'link' ? 'link' : 'iframe'
+    urlInput.value = (s && s.url) || ''
+  }).catch(() => { animBox.checked = true; fpsSel.value = '30'; displaySel.value = 'iframe' })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
       await ctx.rpc.call('save-settings', {
         anim: !!animBox.checked,
-        fps: fpsSel.value === '60' ? 60 : 30
+        fps: fpsSel.value === '60' ? 60 : 30,
+        display: displaySel.value === 'link' ? 'link' : 'iframe',
+        url: urlInput.value.trim()
       })
       msg.textContent = '已保存，重新打开看板生效'
     } catch (error) {

@@ -1,7 +1,7 @@
 {
   "id": "haloflux-ai-link",
   "name": "HALOFLUX AI LINK",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "apiVersion": 1,
   "description": "Studio 原生 AI 运行看板：会话、令牌、思考过程、任务计划、工具调用、CPU/磁盘。",
   "author": {

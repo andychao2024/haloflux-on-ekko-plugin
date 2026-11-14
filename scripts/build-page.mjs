@@ -137,6 +137,13 @@ let out = html
   .replace('<script src="wp.js"></script>', `<script>${escapeScript(wp)}</script>\n<script>${escapeScript(shim)}</script>\n<script>${escapeScript(control)}</script>`)
   .replace(/<script src="ai-link\.js[^"]*"><\/script>/, `<script>${escapeScript(aiPatched)}</script>`)
 
+out = out.replace('</head>', `<style>
+/* Studio 插件页高度通常小于整屏：缩短舞台，给底部面板留空间 */
+@media (max-height:780px){ .stage{height:54vh !important} }
+@media (max-height:640px){ .stage{height:47vh !important} }
+@media (max-height:540px){ .stage{height:40vh !important} }
+</style></head>`)
+
 if (out === html) throw new Error('未找到 wp.js / ai-link.js 脚本标签，结构可能已变')
 
 writeFileSync(join(root, 'page-html.mjs'),

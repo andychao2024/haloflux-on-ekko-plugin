@@ -28,11 +28,26 @@
             30,
             60
           ]
+        },
+        "display": {
+          "type": "string",
+          "description": "显示方式：iframe 内嵌，或 link 新链接。",
+          "enum": [
+            "iframe",
+            "link"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "description": "link 模式打开的地址（可带访问令牌）；空则不跳转。",
+          "maxLength": 2048
         }
       },
       "required": [
         "anim",
-        "fps"
+        "fps",
+        "display",
+        "url"
       ],
       "additionalProperties": false
     },
