@@ -27,8 +27,8 @@ export async function mount(root, ctx) {
 
   const style = document.createElement('style')
   style.textContent = `
-    .hl-root { position:fixed; inset:0; height:auto; width:auto; overflow:hidden; background:#05070a; z-index:0; }
-    .hl-frame { position:absolute; inset:0; width:100%; height:100%; border:0; background:#05070a; }
+    .hl-root { position:fixed; inset:0; height:auto; width:auto; overflow:hidden; background:#08090b; z-index:0; }
+    .hl-frame { position:absolute; inset:0; width:100%; height:100%; border:0; background:#08090b; }
 
   `
   root.append(style)
@@ -224,9 +224,21 @@ export async function mount(root, ctx) {
       ai.taskPlan = Object.assign({}, plans[0], { plans })
     }
 
-    if (liveTools.length) {
-      ai.recentTools = liveTools.slice(0, 8).concat(Array.isArray(ai.recentTools) ? ai.recentTools : []).slice(0, 8)
-      ai.toolCalls = Math.max(Number(ai.toolCalls) || 0, liveToolCount)
+    // 服务端已经把历史工具调用放进 recentTools；这里只叠加页面端实时收到的调用。
+    const baseTools = Array.isArray(ai.recentTools) ? ai.recentTools : []
+    if (liveTools.length || baseTools.length) {
+      const merged = []
+      for (const tool of liveTools.concat(baseTools).sort((a, b) => (b.at || 0) - (a.at || 0))) {
+        // 同一次调用可能同时出现在实时事件和服务端历史里，15 秒内同名同参只保留一条
+        const dup = merged.some((item) =>
+          item.name === tool.name && (item.arg || '') === (tool.arg || '') &&
+          Math.abs((item.at || 0) - (tool.at || 0)) < 15000)
+        if (!dup) merged.push(tool)
+        if (merged.length >= 8) break
+      }
+      ai.recentTools = merged
+      ai.toolAgents = [...new Set(merged.map((t) => t.agent).filter(Boolean))]
+      ai.toolCalls = Math.max(Number(ai.toolCalls) || 0, liveToolCount, merged.length)
     }
     if (liveEvent) {
       ai.lastEvent = liveEvent.type

@@ -15,6 +15,17 @@ export function buildLegacyStats(snap, host, version) {
   const streams = Array.isArray(snap.streams) ? snap.streams : []
   const plans = (snap.taskPlan && Array.isArray(snap.taskPlan.plans)) ? snap.taskPlan.plans : []
   const tools = Array.isArray(snap.tools) ? snap.tools : []
+  const backfillTools = Array.isArray(snap.backfillTools) ? snap.backfillTools : []
+  const recentTools = tools.concat(backfillTools)
+    .sort((a, b) => (b.at || 0) - (a.at || 0))
+    .slice(0, 8)
+  // Studio 的会话列表通常不填 tool_call_count；至少让计数与“最近 8 条”一致，
+  // 避免 KPI 永远显示 0。
+  const toolCallsTotal = Math.max(
+    num((snap.totals || {}).toolCalls) || 0,
+    num(snap.toolCount) || 0,
+    recentTools.length
+  )
   const events = Array.isArray(snap.events) ? snap.events : []
   const topAgent = agents[0] || {}
   const topStream = streams[0] || {}
@@ -35,6 +46,7 @@ export function buildLegacyStats(snap, host, version) {
     uptimeSec: num(host.uptimeSec),
     link: { source: 'studio-plugin' },
     activeSessions: Array.isArray(snap.activeSessions) ? snap.activeSessions : [],
+    recentSessions: Array.isArray(snap.recentSessions) ? snap.recentSessions : [],
     server: {
       version,
       cores: Array.isArray(host.cpuCores) ? host.cpuCores.length : 0,
@@ -69,7 +81,7 @@ export function buildLegacyStats(snap, host, version) {
         running: a.active ? 1 : 0,
         tokensTotal: a.tokens,
         messages: a.messages,
-        toolCalls: num(snap.toolCount) || 0,
+        toolCalls: Math.max(num(a.toolCalls) || 0, recentTools.filter((t) => t.agent === a.agent).length),
         model: a.model || null,
         provider: a.provider || null,
         title: null,
@@ -77,16 +89,22 @@ export function buildLegacyStats(snap, host, version) {
         active: !!a.active
       })),
       sessions: snap.sessions ? snap.sessions.total : null,
-      toolCalls: num(snap.toolCount) || 0,
+      toolCalls: toolCallsTotal,
       messages: num((snap.totals || {}).messages) ?? agents.reduce((n, a) => n + (a.messages || 0), 0),
-      recentTools: tools.slice(0, 8).map((t) => ({
-        agent: t.agent,
-        name: t.name,
-        arg: t.arg,
-        state: t.state,
-        at: t.at,
-        ageSec: sec(t.at, now)
-      })),
+      recentTools: recentTools.map((t) => {
+        const item = {
+          agent: t.agent,
+          name: t.name,
+          arg: t.arg,
+          state: t.state,
+          at: t.at,
+          ageSec: sec(t.at, now)
+        }
+        if (!item.arg) delete item.arg
+        return item
+      }),
+      toolSource: 'studio-db',
+      toolAgents: [...new Set(recentTools.map((t) => t.agent).filter(Boolean))],
       recentCalls: null,
       currentSkill: snap.skills && snap.skills.current
         ? { name: snap.skills.current.name, agent: null, action: null, at: null, ageSec: null, active: false }

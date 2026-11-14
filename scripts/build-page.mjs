@@ -23,8 +23,6 @@ const bgmPath = join(root, 'assets/bgm.mp3')
 const bgm = existsSync(bgmPath) ? 'data:audio/mpeg;base64,' + readFileSync(bgmPath).toString('base64') : ''
 
 const aiPatched = ai
-  .replace(/'CPU \/ GPU 负载'/g, "'CPU / 磁盘 IO'")
-  .replace('红 CPU · 蓝 NVMe IO · 紫 GPU（0% 时隐藏）', '红 CPU · 蓝 NVMe IO')
 
 const escapeScript = (code) => code.replace(/<\/script/gi, '<\\/script')
 
@@ -149,32 +147,11 @@ let out = html
   .replace(/<script src="ai-link\.js[^"]*"><\/script>/, `<script>${escapeScript(aiPatched)}</script>`)
 
 out = out.replace('</head>', `<style>
-/* Studio 插件页高度通常小于整屏：缩短舞台，给底部面板留空间 */
-@media (max-height:780px){ .stage{height:54vh !important} }
-@media (max-height:640px){ .stage{height:47vh !important} }
-@media (max-height:540px){ .stage{height:40vh !important} }
-/* 窄屏（手机/Studio 侧栏展开）：避免横向滚动，压缩页头与 HUD */
-@media (max-width: 640px) {
-  html, body { overflow-x: hidden !important; }
-  .app { width: 100% !important; overflow-x: hidden !important; }
-  header { grid-template-columns: minmax(0,1fr) repeat(2, minmax(0,1fr)) !important;
-           gap: 4px 8px !important; padding: 8px 10px 0 !important; }
-  header .brand h1 { font-size: 13px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  header .brand p { display: none !important; }
-  header .kpi:nth-child(n+4) { display: none !important; }
-  header .kpi .k { font-size: 8px !important; letter-spacing: .5px; }
-  header .kpi .v { font-size: 15px !important; }
-  #stageWrap { height: 46vh !important; }
-  .panels { padding: 6px 8px 10px !important; gap: 6px !important; }
-  .panels .p { padding: 6px 8px !important; }
-  #aix-hud { width: min(72vw, 232px) !important; right: 8px !important; top: 58px !important; }
-}
-/* 插件内关闭全屏柔光/扫光与 HUD 数值闪烁，避免刷新时整页闪一下；
-   舞台本身、面板、状态片不受影响。 */
-html,body{background:#05070a !important}
+/* 插件内只做两件最小改动，其余布局/动效/卡片尺寸与 docker 版完全一致：
+   1. 背景色对齐页面自身 --bg
+   2. 右上角音乐开关隐藏（音乐改到插件设置页） */
+html,body{background:#08090b !important}
 #aix-topbar{display:none !important}
-#aix-fx{display:none !important}
-#aix-hud .aix-v.aix-on{animation:none !important}
 </style></head>`)
 
 if (out === html) throw new Error('未找到 wp.js / ai-link.js 脚本标签，结构可能已变')

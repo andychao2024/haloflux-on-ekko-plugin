@@ -22,6 +22,7 @@ export function createStore() {
   const skills = { current: null, top: [], fetchedAt: 0 }
   const sessionUsage = new Map()
   const contextLimits = new Map()
+  const toolHistory = new Map()  // sessionId -> { at, list } 历史工具调用（服务端回填）
 
   function upsertSessions(list) {
     const seen = new Set()
@@ -44,6 +45,7 @@ export function createStore() {
         outputTokens: Number(item.output_tokens) || 0,
         cacheRead: Number(item.cache_read_tokens) || 0,
         cacheWrite: Number(item.cache_write_tokens) || 0,
+        toolCalls: Number(item.tool_call_count) || 0,
         archived: !!item.is_archived
       })
     }
@@ -210,6 +212,14 @@ export function createStore() {
     contextLimits.set(model, Math.round(limit))
   }
 
+  function setToolHistory(sessionId, list) {
+    if (!sessionId) return
+    toolHistory.set(sessionId, {
+      at: Date.now(),
+      list: Array.isArray(list) ? list.slice(0, 8) : []
+    })
+  }
+
   function setRate(next) {
     Object.assign(rate, next, { updatedAt: Date.now() })
   }
@@ -237,27 +247,35 @@ export function createStore() {
     for (const s of sess) {
       const agg = byAgent.get(s.agent) || {
         agent: s.agent, profile: s.profile, sessions: 0, tokens: 0,
-        messages: 0, lastActive: 0, model: s.model || null,
+        messages: 0, toolCalls: 0, lastActive: 0, model: s.model || null,
         provider: s.provider || null, active: false
       }
       agg.sessions += 1
       agg.tokens += (s.inputTokens || 0) + (s.outputTokens || 0) + (s.cacheRead || 0) + (s.cacheWrite || 0)
       agg.messages += s.messageCount || 0
+      agg.toolCalls += s.toolCalls || 0
       agg.lastActive = Math.max(agg.lastActive, s.lastActive || 0)
       agg.model = agg.model || s.model || null
       agg.provider = agg.provider || s.provider || null
       agg.active = agg.active || t - (s.lastActive || 0) < ACTIVE_SEC || !!((streams.get(s.id) || {}).working)
       byAgent.set(s.agent, agg)
     }
-    const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, messages: 0 }
+    const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, messages: 0, toolCalls: 0 }
     for (const s of sess) {
       totals.input += s.inputTokens || 0
       totals.output += s.outputTokens || 0
       totals.cacheRead += s.cacheRead || 0
       totals.cacheWrite += s.cacheWrite || 0
       totals.messages += s.messageCount || 0
+      totals.toolCalls += s.toolCalls || 0
     }
     totals.tokens = totals.input + totals.output + totals.cacheRead + totals.cacheWrite
+
+    const recentSessions = sess
+      .filter((s) => s.lastActive)
+      .sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))
+      .slice(0, 6)
+      .map((s) => ({ id: s.id, agent: s.agent, profile: s.profile, title: s.title || '', lastActive: s.lastActive || 0 }))
 
     let current = null
     for (const s of sess) {
@@ -343,10 +361,19 @@ export function createStore() {
     planList.sort((a, b) =>
       (b.state === 'running' ? 1 : 0) - (a.state === 'running' ? 1 : 0) || (b.ts || 0) - (a.ts || 0))
 
+    const backfillTools = []
+    for (const [sid, rec] of toolHistory) {
+      const meta = sessions.get(sid) || {}
+      if (!ok(meta.profile)) continue
+      for (const item of rec.list) backfillTools.push(item)
+    }
+    backfillTools.sort((a, b) => (b.at || 0) - (a.at || 0))
+
     return {
       at: now,
       totals,
       activeSessions: activeList,
+      recentSessions,
       current,
       context,
       usage: {
@@ -362,6 +389,7 @@ export function createStore() {
       taskPlan: { plans: planList.slice(0, 10) },
       toolCount,
       tools: tools.filter((x) => ok(x.profile)).slice(-20).reverse(),
+      backfillTools: backfillTools.slice(0, 12),
       events: events.filter((x) => ok(x.profile)).slice(-30).reverse(),
       skills: { current: skills.current, top: skills.top }
     }
@@ -370,6 +398,7 @@ export function createStore() {
   return {
     sessions, streams, plans, tools, events, usage, skills,
     upsertSessions, streamFor, appendDelta, setWorking, noteTool, setPlan,
-    addEvent, setUsage, setRate, setSkills, setSessionUsage, setContextLimit, backfillStream, snapshot
+    addEvent, setUsage, setRate, setSkills, setSessionUsage, setContextLimit, setToolHistory,
+    backfillStream, snapshot
   }
 }
