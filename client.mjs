@@ -10,6 +10,7 @@ const PAGE_HTML = "<!doctype html>\n<!--\n  HALOFLUX - Copyright (c) 2026 Ryder1
  */
 
 export async function mount(root, ctx) {
+  try { ctx.rpc.call(ctx.view === 'settings' ? 'note-settings' : 'note-dashboard').catch(() => {}) } catch (_) {}
   if (ctx.view === 'settings') return mountSettings(root, ctx)
 
   const settings = await ctx.rpc.call('get-settings').catch(() => ({ anim: true, fps: 30, display: 'iframe', url: '' }))

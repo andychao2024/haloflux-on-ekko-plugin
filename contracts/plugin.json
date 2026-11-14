@@ -86,6 +86,16 @@
       "description": "返回 /stats 兼容快照。",
       "input": "empty",
       "output": "stats"
+    },
+    "note-dashboard": {
+      "description": "诊断：记录一次看板页挂载。",
+      "input": "empty",
+      "output": "empty"
+    },
+    "note-settings": {
+      "description": "诊断：记录一次设置页挂载。",
+      "input": "empty",
+      "output": "empty"
     }
   },
   "tools": {},

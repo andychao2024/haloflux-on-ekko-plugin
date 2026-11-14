@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { assertContracts, registerRpc } from './sdk/harness/contracts.mjs'
 import { createStore } from './src/store.mjs'
@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.6.4'
+const VERSION = '0.6.5'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -225,6 +225,16 @@ export function apply(ctx) {
     const snap = store.snapshot(profiles)
     return buildLegacyStats(snap, metrics.state, VERSION)
   })
+
+  const noteMount = (kind) => {
+    if (!dumpDir) return
+    try {
+      const line = new Date().toISOString() + ' ' + kind + '\n'
+      appendFileSync(join(dumpDir, 'mounts.log'), line)
+    } catch (_) { /* ignore */ }
+  }
+  registerRpc(ctx, contract, 'note-dashboard', async () => { noteMount('dashboard'); return null })
+  registerRpc(ctx, contract, 'note-settings', async () => { noteMount('settings'); return null })
 
   registerRpc(ctx, contract, 'get-settings', async (_input, run) => {
     const saved = (await run.state.user.namespace('haloflux').get('settings')) || {}
