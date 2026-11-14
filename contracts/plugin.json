@@ -41,13 +41,18 @@
           "type": "string",
           "description": "link 模式打开的地址（可带访问令牌）；空则不跳转。",
           "maxLength": 2048
+        },
+        "compat": {
+          "type": "boolean",
+          "description": "兼容模式：DPR 固定 1、禁用 will-change，缓解旧显卡闪烁；默认 false。"
         }
       },
       "required": [
         "anim",
         "fps",
         "display",
-        "url"
+        "url",
+        "compat"
       ],
       "additionalProperties": false
     },

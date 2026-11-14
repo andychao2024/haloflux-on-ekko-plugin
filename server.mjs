@@ -7,7 +7,7 @@ import { createConnections } from './src/conn.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.5.0'
+const VERSION = '0.5.1'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -242,7 +242,8 @@ export function apply(ctx) {
       anim: saved.anim !== false,
       fps: saved.fps === 60 ? 60 : 30,
       display: saved.display === 'link' ? 'link' : 'iframe',
-      url: typeof saved.url === 'string' ? saved.url : ''
+      url: typeof saved.url === 'string' ? saved.url : '',
+      compat: !!saved.compat
     }
   })
 
@@ -251,7 +252,8 @@ export function apply(ctx) {
       anim: input.anim !== false,
       fps: input.fps === 60 ? 60 : 30,
       display: input.display === 'link' ? 'link' : 'iframe',
-      url: typeof input.url === 'string' ? input.url.slice(0, 2048) : ''
+      url: typeof input.url === 'string' ? input.url.slice(0, 2048) : '',
+      compat: !!input.compat
     })
     return { ok: true }
   })

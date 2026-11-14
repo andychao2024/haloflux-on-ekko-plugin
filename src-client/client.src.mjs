@@ -15,6 +15,7 @@ export async function mount(root, ctx) {
   const fps = settings && settings.fps === 60 ? 60 : 30
   const display = settings && settings.display === 'link' ? 'link' : 'iframe'
   const url = (settings && typeof settings.url === 'string') ? settings.url.trim() : ''
+  const compat = !!(settings && settings.compat)
 
   const style = document.createElement('style')
   style.textContent = `
@@ -61,7 +62,7 @@ export async function mount(root, ctx) {
   }
 
   function pushSettings() {
-    post({ __hl: 'settings', value: { anim, fps } })
+    post({ __hl: 'settings', value: { anim, fps, compat } })
   }
 
   async function onMessage(event) {
@@ -114,6 +115,7 @@ function mountSettings(root, ctx) {
       <input id="hls-url" type="text" placeholder="https://.../?k=..." style="flex:1;min-width:320px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.2)">
     </label>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式）</label>
+    <label><input type="checkbox" id="hls-compat"> 兼容模式（Big Sur / 旧显卡：DPR=1，关闭 will-change）</label>
     <label>舞台帧率
       <select id="hls-fps">
         <option value="30">30 FPS（省电）</option>
@@ -134,12 +136,14 @@ function mountSettings(root, ctx) {
   const fpsSel = wrap.querySelector('#hls-fps')
   const displaySel = wrap.querySelector('#hls-display')
   const urlInput = wrap.querySelector('#hls-url')
+  const compatBox = wrap.querySelector('#hls-compat')
   const msg = wrap.querySelector('#hls-msg')
   ctx.rpc.call('get-settings').then((s) => {
     animBox.checked = !(s && s.anim === false)
     fpsSel.value = s && s.fps === 60 ? '60' : '30'
     displaySel.value = s && s.display === 'link' ? 'link' : 'iframe'
     urlInput.value = (s && s.url) || ''
+    compatBox.checked = !!(s && s.compat)
   }).catch(() => { animBox.checked = true; fpsSel.value = '30'; displaySel.value = 'iframe' })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
@@ -147,7 +151,8 @@ function mountSettings(root, ctx) {
         anim: !!animBox.checked,
         fps: fpsSel.value === '60' ? 60 : 30,
         display: displaySel.value === 'link' ? 'link' : 'iframe',
-        url: urlInput.value.trim()
+        url: urlInput.value.trim(),
+        compat: !!compatBox.checked
       })
       msg.textContent = '已保存，重新打开看板生效'
     } catch (error) {

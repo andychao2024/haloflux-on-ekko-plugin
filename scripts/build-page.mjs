@@ -57,6 +57,18 @@ const shim = `
     }
     var canvas = document.getElementById('stage');
     if (canvas) canvas.style.visibility = settings.anim === false ? 'hidden' : 'visible';
+    if (settings.compat) {
+      try {
+        if (!window.__hlCompat) {
+          window.__hlCompat = true;
+          Object.defineProperty(window, 'devicePixelRatio', { get: function () { return 1; }, configurable: true });
+          var st = document.createElement('style');
+          st.textContent = '*,*::before,*::after{will-change:auto !important}canvas{image-rendering:auto}';
+          document.head.appendChild(st);
+          window.dispatchEvent(new Event('resize'));
+        }
+      } catch (e) { /* ignore */ }
+    }
   }
   window.addEventListener('message', function (event) {
     var m = event.data || {};
