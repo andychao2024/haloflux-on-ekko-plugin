@@ -168,8 +168,17 @@ export async function mount(root, ctx) {
 
   async function ensureLive(sessions) {
     if (!ctx.host || !ctx.host.sessions || typeof ctx.host.sessions.connect !== 'function') return
-    for (const meta of (sessions || []).slice(0, 4)) {
-      if (!meta || !meta.id || handles.has(meta.id)) continue
+    const targets = (sessions || []).slice(0, 4).filter((meta) => meta && meta.id)
+    // 只保留当前关注列表里的连接，避免长时间打开页面后积累大量句柄
+    const keep = new Set(targets.map((meta) => meta.id))
+    for (const [id, handle] of [...handles]) {
+      if (keep.has(id)) continue
+      try { if (handle && handle.close) handle.close() } catch (_) { /* ignore */ }
+      handles.delete(id)
+      live.delete(id)
+    }
+    for (const meta of targets) {
+      if (handles.has(meta.id)) continue
       try {
         const handle = await ctx.host.sessions.connect(meta.id, (event) => {
           try { onLiveEvent(meta.id, meta, event) } catch (_) { /* ignore */ }
@@ -277,6 +286,20 @@ export async function mount(root, ctx) {
       ai.lastEvent = liveEvent.type
       ai.lastEventAgeSec = Math.max(0, Math.round((Date.now() - liveEvent.at) / 1000))
     }
+
+    // 实时层：正在收到事件的 Agent 立即标成活跃，不依赖 session.last_active
+    // （CodeBuddy 等外部 Agent 的 last_active 通常在回合结束后才更新）。
+    const workingAgents = new Set()
+    for (const slot of live.values()) {
+      if (slot.working && slot.ts && Date.now() - slot.ts > 10 * 60 * 1000) slot.working = false
+      if (slot.working) workingAgents.add(slot.agent)
+    }
+    if (workingAgents.size && Array.isArray(ai.agents)) {
+      ai.agents = ai.agents.map((item) => workingAgents.has(item.agent)
+        ? Object.assign({}, item, { active: true, running: 1, activeSessions: item.sessions })
+        : item)
+      ai.activeAgents = ai.agents.filter((item) => item.active).length
+    }
     return d
   }
 
@@ -289,7 +312,14 @@ export async function mount(root, ctx) {
         const data = await ctx.rpc.call('stats')
         if (data) {
           applyLive(data)
-          ensureLive(data.activeSessions)
+          const liveList = []
+          const liveSeen = new Set()
+          for (const meta of (data.activeSessions || []).concat(data.recentSessions || [])) {
+            if (!meta || !meta.id || liveSeen.has(meta.id)) continue
+            liveSeen.add(meta.id)
+            liveList.push(meta)
+          }
+          ensureLive(liveList)
           backfill(data.activeSessions)
         }
         window.__hlBridge.last = data

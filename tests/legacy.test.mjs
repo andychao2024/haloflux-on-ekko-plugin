@@ -34,7 +34,7 @@ test('lifetime totals, current session and active list are derived from sessions
 test('legacy stats contain no undefined fields and keep idle streams valid', () => {
   const { store } = seed()
   store.appendDelta('a', 'reasoning', '历史思考')
-  const stats = buildLegacyStats(store.snapshot(null), {}, '0.8.14')
+  const stats = buildLegacyStats(store.snapshot(null), {}, '0.8.15')
   assert.deepEqual(noUndefined(stats), [])
   assert.equal(stats.link.source, 'studio-plugin')
   assert.equal(stats.ai.streams[0].agent, 'claude')
@@ -49,10 +49,19 @@ test('historical tool calls are merged into recentTools with agent labels', () =
     { profile: 'default', agent: 'hermes', sessionId: 'b', at: (now - 5) * 1000, name: 'Read', arg: 'file.js', state: 'done' },
     { profile: 'default', agent: 'hermes', sessionId: 'b', at: (now - 2) * 1000, name: 'Bash', arg: 'npm test', state: 'done' }
   ])
-  const stats = buildLegacyStats(store.snapshot(null), {}, '0.8.14')
+  const stats = buildLegacyStats(store.snapshot(null), {}, '0.8.15')
   assert.deepEqual(stats.ai.recentTools.map((t) => t.name), ['Bash', 'Read'])
   assert.deepEqual(stats.ai.toolAgents, ['hermes'])
   assert.equal(stats.ai.toolSource, 'studio-db')
   assert.equal(stats.ai.toolCalls, 2)
   assert.deepEqual(noUndefined(stats), [])
+})
+
+test('a session marked as working activates its agent without a fresh lastActive', () => {
+  const { store } = seed()
+  store.setSessionWorking('a', true)
+  const snap = store.snapshot(null)
+  const claude = snap.agents.find((agent) => agent.agent === 'claude')
+  assert.equal(claude.active, true)
+  assert.deepEqual(snap.activeSessions.map((s) => s.id).sort(), ['a', 'b'])
 })

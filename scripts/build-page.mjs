@@ -42,6 +42,9 @@ aiPatched = mustReplace(aiPatched,
 aiPatched = mustReplace(aiPatched,
   'try { buildBgmToggle(); } catch (e) { /* ignore */ }',
   'try { /* 背景音乐功能已移除 */ } catch (e) { /* ignore */ }', 'BGM 开关')
+aiPatched = mustReplace(aiPatched,
+  "var t = '代理调度' + (list.length ? ' · ' + list.length : '');",
+  "var t = '代理调度';", '代理调度标题计数')
 
 const escapeScript = (code) => code.replace(/<\/script/gi, '<\\/script')
 
