@@ -1,4 +1,6 @@
 import os from 'node:os'
+import { execFile } from 'node:child_process'
+import { basename } from 'node:path'
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs'
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
@@ -9,6 +11,60 @@ const round = (n, d = 1) => {
 
 function readText(path) {
   try { return readFileSync(path, 'utf8') } catch (_) { return null }
+}
+
+function readNumber(path) {
+  const text = readText(path)
+  if (text == null) return null
+  const n = Number(String(text).trim())
+  return Number.isFinite(n) ? n : null
+}
+
+function listDir(path) {
+  try { return readdirSync(path) } catch (_) { return [] }
+}
+
+const GPU_VENDORS = { '0x10de': 'NVIDIA', '0x1002': 'AMD', '0x8086': 'Intel', '0x13b5': 'ARM' }
+const toMB = (bytes) => (bytes == null ? null : Math.round(bytes / 1048576))
+
+function firstGroup(text, re) {
+  const m = text ? re.exec(text) : null
+  return m ? String(m[1]).trim() : null
+}
+
+/** NVIDIA 的型号写在 /proc/driver/nvidia/gpus/<pci>/information 里，不需要 nvidia-smi。 */
+function nvidiaProcName() {
+  for (const id of listDir('/proc/driver/nvidia/gpus')) {
+    const name = firstGroup(readText('/proc/driver/nvidia/gpus/' + id + '/information'), /Model:\s*(.+)/)
+    if (name) return name
+  }
+  return null
+}
+
+/**
+ * 探测本机显卡：先看 ARM 的 Mali sysfs（RK3588 这类板子），
+ * 再看 /sys/class/drm 下的 PCI/平台显卡（NVIDIA / AMD / Intel）。
+ * 只做识别，不加载任何额外依赖；识别不到返回 null。
+ */
+export function detectGpu() {
+  if (readText('/sys/class/misc/mali0/device/utilisation') != null) {
+    return { name: 'Mali GPU', vendor: 'ARM', driver: 'mali', source: 'mali-sysfs', path: '/sys/class/misc/mali0/device' }
+  }
+  for (const card of listDir('/sys/class/drm')) {
+    if (!/^card\d+$/.test(card)) continue
+    const base = '/sys/class/drm/' + card + '/device'
+    const vendor = String(readText(base + '/vendor') || '').trim()
+    if (!vendor) continue
+    let driver = ''
+    try { driver = basename(readlinkSync(base + '/driver')) } catch (_) { /* ignore */ }
+    const brand = GPU_VENDORS[vendor] || vendor
+    let name = null
+    if (brand === 'NVIDIA') name = nvidiaProcName()
+    else if (brand === 'AMD') name = firstGroup(readText(base + '/product_name'), /^(.+)$/)
+    if (!name) name = brand + ' GPU' + (driver ? ' · ' + driver : '')
+    return { name, vendor: brand, driver, source: 'drm-sysfs', path: base }
+  }
+  return null
 }
 
 function cpuTimes() {
@@ -124,6 +180,7 @@ export function perCoreUsage(curCores, prevCores) {
 }
 
 export function createMetrics() {
+  const gpuDevice = detectGpu()
   const state = {
     cpu: null,
     cpuCores: [],
@@ -132,13 +189,46 @@ export function createMetrics() {
     ramDetail: null,
     disk: null,
     net: null,
-    gpu: null,
+    // 先只带型号，利用率/显存由第一次采样填入
+    gpu: gpuDevice
+      ? { name: gpuDevice.name, utilization: null, memoryUsedMB: null, memoryTotalMB: null, source: gpuDevice.source }
+      : null,
     uptimeSec: Math.round(os.uptime())
   }
   let prevCpu = null
   let prevCores = null
   let prevDisk = null
   let prevNet = null
+  let nvidiaBusy = false
+  let lastNvidiaAt = 0
+  // nvidia-smi 的最近一次结果。必须缓存：同步采样每轮都会重写 state.gpu，
+  // 不回填的话上一轮的 smi 数值会被立刻覆盖成 null。
+  let nvidiaStats = null
+
+  // NVIDIA 的利用率只能问 nvidia-smi；异步跑，避免阻塞采样循环。
+  function pollNvidia(device) {
+    if (nvidiaBusy || Date.now() - lastNvidiaAt < 5000) return
+    nvidiaBusy = true
+    lastNvidiaAt = Date.now()
+    execFile(
+      'nvidia-smi',
+      ['--query-gpu=name,utilization.gpu,memory.used,memory.total', '--format=csv,noheader,nounits'],
+      { timeout: 2000 },
+      (error, stdout) => {
+        nvidiaBusy = false
+        const line = String(stdout || '').trim().split('\n')[0]
+        if (error || !line) return
+        const [name, util, used, total] = line.split(',').map((s) => s.trim())
+        const u = Number(util)
+        nvidiaStats = {
+          name: name || device.name,
+          utilization: Number.isFinite(u) ? clamp(u, 0, 100) : null,
+          memoryUsedMB: Number.isFinite(Number(used)) ? Number(used) : null,
+          memoryTotalMB: Number.isFinite(Number(total)) ? Number(total) : null
+        }
+      }
+    )
+  }
 
   function sample() {
     const now = Date.now()
@@ -190,10 +280,40 @@ export function createMetrics() {
         state.disk = null
       }
 
-      const gpuUtil = readText('/sys/class/misc/mali0/device/utilisation')
-      if (gpuUtil != null) {
-        const n = Number(String(gpuUtil).trim())
-        state.gpu = Number.isFinite(n) ? { utilization: Math.max(0, Math.min(100, n)), name: 'Mali GPU', source: 'mali-sysfs' } : null
+      if (!gpuDevice) {
+        state.gpu = null
+      } else if (gpuDevice.source === 'mali-sysfs') {
+        const n = readNumber(gpuDevice.path + '/utilisation')
+        state.gpu = {
+          name: gpuDevice.name,
+          utilization: n == null ? null : clamp(n, 0, 100),
+          memoryUsedMB: null,
+          memoryTotalMB: null,
+          source: 'mali-sysfs'
+        }
+      } else {
+        // AMD(amdgpu) / Intel(i915) 的利用率与显存在 sysfs 里；NVIDIA 走 nvidia-smi
+        const util = gpuDevice.vendor === 'AMD' ? readNumber(gpuDevice.path + '/gpu_busy_percent') : null
+        const used = gpuDevice.vendor === 'AMD' ? readNumber(gpuDevice.path + '/mem_info_vram_used') : null
+        const total = gpuDevice.vendor === 'AMD' ? readNumber(gpuDevice.path + '/mem_info_vram_total') : null
+        if (gpuDevice.vendor === 'NVIDIA') {
+          state.gpu = {
+            name: (nvidiaStats && nvidiaStats.name) || gpuDevice.name,
+            utilization: nvidiaStats ? nvidiaStats.utilization : null,
+            memoryUsedMB: nvidiaStats ? nvidiaStats.memoryUsedMB : null,
+            memoryTotalMB: nvidiaStats ? nvidiaStats.memoryTotalMB : null,
+            source: nvidiaStats ? 'nvidia-smi' : gpuDevice.source
+          }
+          pollNvidia(gpuDevice)
+        } else {
+          state.gpu = {
+            name: gpuDevice.name,
+            utilization: util == null ? null : clamp(util, 0, 100),
+            memoryUsedMB: toMB(used),
+            memoryTotalMB: toMB(total),
+            source: gpuDevice.source
+          }
+        }
       }
 
       const net = parseNetdev(readText('/proc/net/dev'))

@@ -5,8 +5,8 @@ import { assertContracts, validateModel } from '../sdk/harness/contracts.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('../contracts/plugin.json', import.meta.url), 'utf8')))
 
-test('settings model requires the four declared fields', () => {
-  const value = { anim: true, compat: false, title: 'HALOFLUX ON Ekko' }
+test('settings model requires the five declared fields', () => {
+  const value = { anim: true, compat: false, gpu: true, title: 'HALOFLUX ON Ekko' }
   assert.deepEqual(validateModel(contract, 'settings', value), value)
   assert.throws(() => validateModel(contract, 'settings', { anim: true }), /missing/)
   assert.throws(() => validateModel(contract, 'settings', { ...value, extra: 1 }), /unknown property/)

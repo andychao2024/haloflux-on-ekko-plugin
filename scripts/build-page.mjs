@@ -21,26 +21,15 @@ const wp = readFileSync(join(dir, 'wp.js'), 'utf8')
 const ai = readFileSync(join(dir, 'ai-link.js'), 'utf8')
 const build = (ai.match(/var BUILD = '([^']+)'/) || [])[1] || 'v0.0'
 
-/* 只做一处数据口径改动：插件不再展示 GPU（很多设备没有），
-   面板改名并去掉面板内与悬浮说明里的 GPU 图例，动效/布局保持原版。 */
+/* 只做一处口径改动：面板标题里的 GPU 换成「磁盘 IO」。
+   GPU 曲线本身保留，由插件设置里的「显示显卡」开关在运行时控制
+   （ai-link.js 读 window.__hlShowGpu）。动效/布局保持原版。 */
 function mustReplace(text, from, to, label) {
   if (!text.includes(from)) throw new Error('页面结构已变，未找到：' + label)
   return text.split(from).join(to)
 }
 let aiPatched = ai
 aiPatched = mustReplace(aiPatched, "'CPU / GPU 负载'", "'CPU / 磁盘 IO'", 'CPU/GPU 面板标题')
-aiPatched = mustReplace(aiPatched,
-  '红 CPU · 蓝磁盘 IO · 紫 GPU（0% 时隐藏）',
-  '红 CPU · 蓝磁盘 IO', 'CPU/GPU 悬浮说明')
-aiPatched = mustReplace(aiPatched,
-  'var gpuNow = (d && d.gpu && isNum(d.gpu.utilization)) ? d.gpu.utilization : null;',
-  'var gpuNow = null;', 'GPU 采样')
-aiPatched = mustReplace(aiPatched,
-  "var gpuTxt3 = 'GPU ' + (gpuNow === null ? '—' : fmtPct(gpuNow));",
-  "var gpuTxt3 = '';", 'GPU 图例文字')
-aiPatched = mustReplace(aiPatched,
-  "label(o.x, gpuTxt3, o.w - gpuW3 - 2, 2, '#b98cff');",
-  '', 'GPU 图例绘制')
 aiPatched = mustReplace(aiPatched,
   'try { buildBgmToggle(); } catch (e) { /* ignore */ }',
   'try { /* 背景音乐功能已移除 */ } catch (e) { /* ignore */ }', 'BGM 开关')
@@ -74,10 +63,12 @@ const shim = `
     }
   });
 
-  var settings = { anim: true, fps: 30 };
+  var settings = { anim: true, fps: 30, gpu: true };
   var seq = 0, pending = {};
   function applySettings(v) {
     settings = Object.assign({}, settings, v || {});
+    /* 显卡是否显示：ai-link.js 每帧读这个开关，下一帧就生效 */
+    window.__hlShowGpu = settings.gpu !== false;
     if (window.__stageSetFps) window.__stageSetFps(settings.fps === 60 ? 60 : 30);
     if (window.__stagePause) {
       window.__stagePause(settings.anim === false || document.visibilityState === 'hidden');

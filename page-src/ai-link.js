@@ -1555,6 +1555,9 @@
     last: null
   };
 
+  /* 插件设置里可以关掉显卡；宿主通过 __hlShowGpu 下发，未设置时默认显示。 */
+  function gpuVisible() { return window.__hlShowGpu !== false; }
+
   var PANEL_TITLES = ['AI 事件流', '令牌吞吐', '思考过程', 'CPU / GPU 负载',
     '任务计划', '工具调用', '代理调度', '系统负载索引'];
 
@@ -2658,9 +2661,10 @@
       label(o.x, '命中率 ' + (isNum(ai.cacheHitRate) ? fmtPct(ai.cacheHitRate) : '—'),
         o.w - 62, 2, 'rgba(152,224,207,.85)');
       label(o.x, '峰值 ' + fmtRate(max) + ' · 90 秒', 2, o.h - 12, '#6b6f78');
-    } else if (p.index === 3) {       // CPU / GPU / NVMe IO 实时负载（红=CPU，紫=GPU，蓝=硬盘）
+    } else if (p.index === 3) {       // CPU / GPU / diskIO 实时负载（红=CPU，紫=GPU，蓝=硬盘）
       var chartH = Math.max(28, o.h - 46);
-      var gpuNow = (d && d.gpu && isNum(d.gpu.utilization)) ? d.gpu.utilization : null;
+      var showGpu3 = gpuVisible();
+      var gpuNow = (showGpu3 && d && d.gpu && isNum(d.gpu.utilization)) ? d.gpu.utilization : null;
       var diskNow = (d && d.disk && isNum(d.disk.utilization)) ? d.disk.utilization : null;
       var lastDisk = diskNow === null ? null
         : drawSeries(o, CON.hist.disk, '#5aa9ff', 100, 'rgba(90,169,255,.14)', chartH);
@@ -2673,17 +2677,16 @@
       if (lastGpu) { o.x.fillStyle = '#d9c4ff'; o.x.fillRect(o.w - 3, lastGpu.y - 1.5, 3, 3); }
       if (lastCpu) { o.x.fillStyle = '#ffb3b3'; o.x.fillRect(o.w - 3, lastCpu.y - 1.5, 3, 3); }
       var cpuTxt3 = 'CPU ' + fmtPct(d && d.cpu);
-      var gpuTxt3 = 'GPU ' + (gpuNow === null ? '—' : fmtPct(gpuNow));
-      // 设备名由服务端按“第一块整盘”给出（可能是 nvme0n1，也可能是 sda），不要写死 NVMe
-      var diskTag3 = (d && d.disk && d.disk.device) ? String(d.disk.device) : '磁盘';
-      var diskTxt3 = diskTag3 + ' ' + (diskNow === null ? '—' : fmtPct(diskNow));
+      var gpuTxt3 = showGpu3 ? ('GPU ' + (gpuNow === null ? '—' : fmtPct(gpuNow))) : '';
+      // 具体是哪块盘（sda / nvme0n1）放在悬浮说明里，图例统一叫 diskIO
+      var diskTxt3 = 'diskIO ' + (diskNow === null ? '—' : fmtPct(diskNow));
       label(o.x, cpuTxt3, 2, 2, '#ff6b6b');
       o.x.font = FONT_SM;
-      // 图例顺序：左 CPU、中 NVMe、右 GPU
+      // 图例顺序：左 CPU、中 diskIO、右 GPU
       var diskW3 = o.x.measureText(diskTxt3).width;
-      var gpuW3 = o.x.measureText(gpuTxt3).width;
+      var gpuW3 = showGpu3 ? o.x.measureText(gpuTxt3).width : 0;
       label(o.x, diskTxt3, Math.max(o.x.measureText(cpuTxt3).width + 12, (o.w - diskW3) / 2), 2, '#5aa9ff');
-      label(o.x, gpuTxt3, o.w - gpuW3 - 2, 2, '#b98cff');
+      if (showGpu3) label(o.x, gpuTxt3, o.w - gpuW3 - 2, 2, '#b98cff');
 
       // 每个逻辑核心一根小柱（红色，和 CPU 曲线同色；≥80% 更亮）
       var cores = (d && d.cpuCores) || [];
@@ -2742,7 +2745,7 @@
           }
         }
       }
-    } else if (p.index === 7) {       // 系统负载索引：CPU 红 / NVMe IO 蓝 / 内存 绿 / 网络 黄
+    } else if (p.index === 7) {       // 系统负载索引：CPU 红 / diskIO 蓝 / 内存 绿 / 网络 黄
       var cols = 60, rows = 4;
       var cw = o.w / cols, chh = o.h / rows;
       var metrics = [CON.hist.cpu, CON.hist.disk, CON.hist.ram, CON.hist.net];
@@ -2753,7 +2756,7 @@
           var hidx = arr.length - cols + ci;
           var hv = hidx >= 0 ? arr[hidx] : 0;
           var hnorm = Math.max(0, Math.min(1, hv / 100));
-          // NVMe 的 %util 天然偏低（几百 MB/s 也只有 10~20%），平方根压缩让小负载也能看出来
+          // 磁盘的 %util 天然偏低（几百 MB/s 也只有 10~20%），平方根压缩让小负载也能看出来
           var shown = mi === 1 ? Math.sqrt(hnorm) : hnorm;
           o.x.fillStyle = (mi === 1 ? hnorm <= 0.002 : hnorm <= 0.02)
             ? '#16181c'
@@ -3549,25 +3552,32 @@
       var cores = (d && d.cpuCores) || [];
       var mx = 0, sum = 0;
       for (var ci = 0; ci < cores.length; ci++) { if (cores[ci] > mx) mx = cores[ci]; sum += cores[ci]; }
+      var showGpuH = gpuVisible();
+      var lines3 = [
+        '处理器：<b>' + esc(String(d.cpuName || '—').slice(0, 26)) + '</b>',
+        '核心：<b>' + (cores.length || (d.server && d.server.cores) || '—') + ' 核</b> · 最高 <b>' +
+          (cores.length ? mx + '%' : '—') + '</b> · 平均 <b>' + (cores.length ? Math.round(sum / cores.length) + '%' : '—') + '</b>',
+        '内存：<b>' + fmtPct(d.ram) + '</b>' + (d.ramDetail ? '（' + d.ramDetail.usedGB + ' / ' + d.ramDetail.totalGB + ' GB）' : ''),
+        'diskIO：<b>' + (d.disk && isNum(d.disk.utilization) ? fmtPct(d.disk.utilization) : '不可用') + '</b>' +
+          (d.disk && d.disk.device ? ' · ' + esc(d.disk.device) : '') +
+          (d.disk && isNum(d.disk.readMBps) ? ' · 读 ' + fmtRate(d.disk.readMBps) + ' / 写 ' + fmtRate(d.disk.writeMBps) + ' MB/s' : '')
+      ];
+      if (showGpuH) {
+        lines3.push('显存：<b>' + (d.gpu && isNum(d.gpu.memoryUsedMB) && isNum(d.gpu.memoryTotalMB)
+          ? d.gpu.memoryUsedMB + ' / ' + d.gpu.memoryTotalMB + ' MB'
+          : (d.gpu ? '—（驱动未提供）' : '—')) + '</b>');
+        lines3.push('显卡：<b>' + esc((d.gpu && d.gpu.name) || '未检测到') + '</b>'
+          + (d.gpu && d.gpu.source === 'mali-sysfs' ? ' · <b>kbase sysfs</b>' : '')
+          + (d.gpu && d.gpu.source === 'nvidia-smi' ? ' · <b>nvidia-smi</b>' : '')
+          + (d.gpu && d.gpu.source === 'drm-sysfs' ? ' · <b>drm sysfs</b>' : ''));
+      }
       return {
         label: 'CPU / GPU 负载',
         value: fmtPct(d.cpu) +
           (d.disk && isNum(d.disk.utilization) ? ' / ' + fmtPct(d.disk.utilization) : '') +
-          ' / ' + (d.gpu ? fmtPct(d.gpu.utilization) : '不可用'),
-        sub: '红 CPU · 蓝磁盘 IO · 紫 GPU（0% 时隐藏）',
-        lines: [
-          '处理器：<b>' + esc(String(d.cpuName || '—').slice(0, 26)) + '</b>',
-          '核心：<b>' + (cores.length || (d.server && d.server.cores) || '—') + ' 核</b> · 最高 <b>' +
-            (cores.length ? mx + '%' : '—') + '</b> · 平均 <b>' + (cores.length ? Math.round(sum / cores.length) + '%' : '—') + '</b>',
-          '内存：<b>' + fmtPct(d.ram) + '</b>' + (d.ramDetail ? '（' + d.ramDetail.usedGB + ' / ' + d.ramDetail.totalGB + ' GB）' : ''),
-          '磁盘：<b>' + (d.disk && isNum(d.disk.utilization) ? fmtPct(d.disk.utilization) : '不可用') + '</b>' +
-            (d.disk && d.disk.device ? ' · ' + esc(d.disk.device) : '') +
-            (d.disk && isNum(d.disk.readMBps) ? ' · 读 ' + fmtRate(d.disk.readMBps) + ' / 写 ' + fmtRate(d.disk.writeMBps) + ' MB/s' : ''),
-          '显存：<b>' + (d.gpu && isNum(d.gpu.memoryUsedMB) && isNum(d.gpu.memoryTotalMB)
-            ? d.gpu.memoryUsedMB + ' / ' + d.gpu.memoryTotalMB + ' MB' : '—（Mali 驱动不提供）') + '</b>',
-          '显卡：<b>' + esc((d.gpu && d.gpu.name) || '未检测到') + '</b>'
-            + (d.gpu && d.gpu.source === 'mali-sysfs' ? ' · <b>kbase sysfs</b>' : '')
-        ]
+          (showGpuH ? ' / ' + (d.gpu ? (isNum(d.gpu.utilization) ? fmtPct(d.gpu.utilization) : '—') : '未检测到') : ''),
+        sub: showGpuH ? '红 CPU · 蓝 diskIO · 紫 GPU（0% 时隐藏）' : '红 CPU · 蓝 diskIO',
+        lines: lines3
       };
     }
     if (idx === 4) {
@@ -3635,7 +3645,7 @@
       label: '系统负载索引', value: 'CPU / 硬盘IO / 内存 / 网络', sub: '4 行 × 60 秒热力图',
       lines: [
         '<i>红</i> 第 1 行 CPU：<b>' + fmtPct(d.cpu) + '</b>',
-        '<i>蓝</i> 第 2 行 ' + (d.disk && d.disk.device ? esc(d.disk.device) : '磁盘 IO') + '：<b>' +
+        '<i>蓝</i> 第 2 行 ' + (d.disk && d.disk.device ? esc(d.disk.device) : 'diskIO') + '：<b>' +
           (d.disk && isNum(d.disk.utilization) ? fmtPct(d.disk.utilization) : '不可用') + '</b>' +
           (d.disk && isNum(d.disk.readMBps)
             ? ' · 读 ' + fmtRate(d.disk.readMBps) + ' / 写 ' + fmtRate(d.disk.writeMBps) + ' MB/s'

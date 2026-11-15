@@ -6,7 +6,7 @@ import { createMetrics } from './src/metrics.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.21'
+const VERSION = '0.8.22'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -243,6 +243,7 @@ export function apply(ctx) {
     return {
       anim: saved.anim !== false,
       compat: !!saved.compat,
+      gpu: saved.gpu !== false,
       title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : ''
     }
   })
@@ -251,6 +252,7 @@ export function apply(ctx) {
     await run.state.user.namespace('haloflux').set('settings', {
       anim: input.anim !== false,
       compat: !!input.compat,
+      gpu: input.gpu !== false,
       title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : ''
     })
     return { ok: true }

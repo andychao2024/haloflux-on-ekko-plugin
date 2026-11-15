@@ -25,6 +25,10 @@
           "type": "boolean",
           "description": "兼容模式：DPR 固定 1、禁用 will-change，缓解旧显卡闪烁；默认 false。"
         },
+        "gpu": {
+          "type": "boolean",
+          "description": "在看板里显示显卡（GPU）曲线与显存信息；默认 true。"
+        },
         "title": {
           "type": "string",
           "description": "看板左上角标题；空字符串使用默认标题。",
@@ -34,6 +38,7 @@
       "required": [
         "anim",
         "compat",
+        "gpu",
         "title"
       ],
       "additionalProperties": false

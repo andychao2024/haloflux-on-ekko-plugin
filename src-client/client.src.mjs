@@ -21,13 +21,14 @@ export async function mount(root, ctx) {
 
   // 宿主侧 RPC 没有超时：通道没建立或请求挂住时，await 会永远不返回，
   // 面板就停在空白。这里最多等 3 秒，拿不到就先按默认设置渲染。
-  const DEFAULTS = { anim: true, compat: false, title: '' }
+  const DEFAULTS = { anim: true, compat: false, gpu: true, title: '' }
   const settings = await Promise.race([
     ctx.rpc.call('get-settings').catch(() => null),
     new Promise((resolve) => setTimeout(() => resolve(null), 3000))
   ]).then((s) => (s && typeof s === 'object' ? s : DEFAULTS))
   const anim = !(settings && settings.anim === false)
   const compat = !!(settings && settings.compat)
+  const gpu = !(settings && settings.gpu === false)
   const title = (settings && typeof settings.title === 'string') ? settings.title.trim() : ''
 
   const style = document.createElement('style')
@@ -401,7 +402,7 @@ export async function mount(root, ctx) {
   }
 
   if (typeof window.__hlApplySettings === 'function') {
-    window.__hlApplySettings({ anim, compat })
+    window.__hlApplySettings({ anim, compat, gpu })
   }
 
   refreshRate()
@@ -441,6 +442,7 @@ function mountSettings(root, ctx) {
         style="flex:1;min-width:280px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.2)">
     </label>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式，默认开启）</label>
+    <label><input type="checkbox" id="hls-gpu"> 显示显卡（GPU 曲线与显存，默认开启；未检测到显卡时不显示）</label>
     <label><input type="checkbox" id="hls-compat"> 兼容模式（DPR=1，关闭 will-change 与 CSS 动画）</label>
     <div><button id="hls-save">保存</button> <span class="muted" id="hls-msg"></span></div>
     <div class="muted">页面与动效来自 HALOFLUX 原作；数据来自 Studio 会话/用量接口与本机指标。插件只读，不读取数据库文件，不发外部网络请求。</div>
@@ -454,18 +456,21 @@ function mountSettings(root, ctx) {
   `
   root.append(wrap)
   const animBox = wrap.querySelector('#hls-anim')
+  const gpuBox = wrap.querySelector('#hls-gpu')
   const compatBox = wrap.querySelector('#hls-compat')
   const titleInput = wrap.querySelector('#hls-title')
   const msg = wrap.querySelector('#hls-msg')
   ctx.rpc.call('get-settings').then((s) => {
     animBox.checked = !(s && s.anim === false)
+    gpuBox.checked = !(s && s.gpu === false)
     compatBox.checked = !!(s && s.compat)
     titleInput.value = (s && s.title) || ''
-  }).catch(() => { animBox.checked = true })
+  }).catch(() => { animBox.checked = true; gpuBox.checked = true })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
       await ctx.rpc.call('save-settings', {
         anim: !!animBox.checked,
+        gpu: !!gpuBox.checked,
         compat: !!compatBox.checked,
         title: titleInput.value.trim()
       })

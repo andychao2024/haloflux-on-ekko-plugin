@@ -24,7 +24,7 @@
 | 实时思考 / 工具 / 任务计划 | 页面端 `ctx.host.sessions.connect` |
 | 历史思考回看 | 页面端 `ctx.host.sessions.messages`（最近 3 个会话） |
 | 技能 | `ctx.host.request('/api/hermes/skills/usage/stats')` |
-| CPU / 内存 / 磁盘 / 网络 / GPU | 插件后端的 Node `os`、`/proc`、Mali sysfs |
+| CPU / 内存 / 磁盘 / 网络 / GPU | 插件后端的 Node `os`、`/proc`、`/sys/class/drm`、Mali sysfs、`nvidia-smi` |
 
 实时连接使用**查看者自己的身份**建立，服务端不使用管理员身份代读会话。权限仅 `api.read` + `ui`。
 
@@ -34,6 +34,7 @@
 - 技能“使用中”：接口只有 7 日聚合，没有单次调用时间
 - 思考回看：只补最近 3 个会话的最后一条，不做完整历史
 - 非 Linux 平台：磁盘/网络/GPU 显示 `—`
+- 显卡：NVIDIA（型号读 `/sys/class/drm`，利用率/显存读 `nvidia-smi`）、AMD（`gpu_busy_percent` / `mem_info_vram_*`）、ARM Mali（kbase sysfs）；Intel 只识别型号。可在插件设置里关闭显示（默认开启）
 - 归档会话不计入累计令牌与消息数
 
 ## 安装
