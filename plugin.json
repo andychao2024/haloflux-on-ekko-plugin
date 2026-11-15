@@ -1,7 +1,7 @@
 {
   "id": "haloflux-ai-link",
   "name": "HALOFLUX ON Ekko",
-  "version": "0.8.22",
+  "version": "0.8.23",
   "apiVersion": 1,
   "description": "Ekko Studio 可视化看板：把 AI 的运行轨迹变成一场同屏联动、实时共振的演出。数据来自 Studio 原生 API 的会话与用量接口，以及本机硬件指标；插件只读，不读取数据库文件，也不发起任何外部网络请求。",
   "author": {
@@ -9,6 +9,7 @@
   },
   "repository": "https://github.com/andychao2024/haloflux-on-ekko-plugin",
   "license": "PolyForm-Noncommercial-1.0.0",
+  "icon": "icon.png",
   "server": "server.mjs",
   "client": "client.mjs",
   "permissions": [
@@ -19,7 +20,8 @@
     {
       "id": "dashboard",
       "title": "HALOFLUX ON Ekko",
-      "slot": "page"
+      "slot": "page",
+      "icon": "icon.png"
     },
     {
       "id": "settings",
@@ -31,7 +33,7 @@
     "main": [
       {
         "viewId": "dashboard",
-        "icon": "chart",
+        "icon": "icon.png",
         "order": 40,
         "title": "HALOFLUX ON Ekko"
       }

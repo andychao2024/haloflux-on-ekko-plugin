@@ -24,12 +24,91 @@ function listDir(path) {
   try { return readdirSync(path) } catch (_) { return [] }
 }
 
-const GPU_VENDORS = { '0x10de': 'NVIDIA', '0x1002': 'AMD', '0x8086': 'Intel', '0x13b5': 'ARM' }
 const toMB = (bytes) => (bytes == null ? null : Math.round(bytes / 1048576))
 
 function firstGroup(text, re) {
   const m = text ? re.exec(text) : null
   return m ? String(m[1]).trim() : null
+}
+
+/* ---------------- 显卡 ---------------- */
+
+// PCI vendor id → 厂商名。虚拟机/远程桌面的虚拟显卡单独归类，避免把它们当成真显卡。
+const PCI_VENDORS = {
+  '0x10de': 'NVIDIA',
+  '0x1002': 'AMD',
+  '0x8086': 'Intel',
+  '0x13b5': 'ARM',
+  '0x5143': 'Qualcomm',
+  '0x14e4': 'Broadcom',
+  '0x1010': 'ImgTec',
+  '0x1af4': 'Virtual',   // virtio
+  '0x15ad': 'Virtual',   // VMware
+  '0x80ee': 'Virtual',   // VirtualBox
+  '0x1234': 'Virtual'    // QEMU 标准 VGA
+}
+
+// 驱动名 → 厂商名。没有 PCI vendor 文件时（平台设备/老内核）靠它兜底。
+const DRIVER_VENDORS = {
+  nvidia: 'NVIDIA',
+  nouveau: 'NVIDIA',
+  amdgpu: 'AMD',
+  radeon: 'AMD',
+  i915: 'Intel',
+  xe: 'Intel',
+  msm: 'Qualcomm',
+  panfrost: 'ARM',
+  panthor: 'ARM',
+  lima: 'ARM',
+  v3d: 'Broadcom',
+  vc4: 'Broadcom'
+}
+
+// 没有负载/显存指标、只负责把画面显示出来的虚拟或固件帧缓冲。
+// 选中它们只会让面板多一条永远为空的曲线，所以默认跳过。
+const VIRTUAL_DRIVERS = new Set([
+  'virtio_gpu', 'vmwgfx', 'qxl', 'vkms', 'bochs', 'cirrus', 'vboxvideo', 'virtualbox',
+  'simpledrm', 'simple-framebuffer'
+])
+
+function readUevent(path) {
+  const text = readText(path + '/uevent') || ''
+  const out = {}
+  for (const line of text.split('\n')) {
+    const i = line.indexOf('=')
+    if (i > 0) out[line.slice(0, i)] = line.slice(i + 1).trim()
+  }
+  return out
+}
+
+const hex = (value) => {
+  const m = /^(?:0x)?([0-9a-f]{4})$/i.exec(String(value || '').trim())
+  return m ? m[1].toLowerCase() : null
+}
+
+let pciIdsText
+/** pci.ids 里查型号名；Intel 等驱动不导出 product_name 时用。找不到就返回 null。 */
+function pciIdsName(vendor, device) {
+  const v = hex(vendor)
+  const d = hex(device)
+  if (!v || !d) return null
+  if (pciIdsText === undefined) {
+    pciIdsText = ['/usr/share/misc/pci.ids', '/usr/share/hwdata/pci.ids', '/usr/share/pci.ids']
+      .map((path) => readText(path))
+      .find((text) => text != null) || ''
+  }
+  if (!pciIdsText) return null
+  const at = pciIdsText.indexOf('\n' + v + '  ')
+  if (at < 0) return null
+  const lines = pciIdsText.slice(at + 1).split('\n')
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i]
+    // 下一个顶格厂商行表示本厂商段落结束
+    if (/^[0-9a-f]{4}  /.test(line)) break
+    const m = /^\t([0-9a-f]{4})  (.+)$/.exec(line)
+    if (m && m[1] === d) return m[2].trim()
+  }
+  return null
 }
 
 /** NVIDIA 的型号写在 /proc/driver/nvidia/gpus/<pci>/information 里，不需要 nvidia-smi。 */
@@ -41,31 +120,83 @@ function nvidiaProcName() {
   return null
 }
 
-/**
- * 探测本机显卡：先看 ARM 的 Mali sysfs（RK3588 这类板子），
- * 再看 /sys/class/drm 下的 PCI/平台显卡（NVIDIA / AMD / Intel）。
- * 只做识别，不加载任何额外依赖；识别不到返回 null。
- */
-export function detectGpu() {
-  if (readText('/sys/class/misc/mali0/device/utilisation') != null) {
-    return { name: 'Mali GPU', vendor: 'ARM', driver: 'mali', source: 'mali-sysfs', path: '/sys/class/misc/mali0/device' }
+/** ARM Mali（RK3588 等板子）的 kbase sysfs；型号在读 gpuinfo。 */
+function maliInfo() {
+  const paths = ['/sys/class/misc/mali0/device']
+  for (const name of listDir('/sys/devices/platform')) {
+    if (/gpu|mali/i.test(name)) paths.push('/sys/devices/platform/' + name)
   }
-  for (const card of listDir('/sys/class/drm')) {
-    if (!/^card\d+$/.test(card)) continue
-    const base = '/sys/class/drm/' + card + '/device'
-    const vendor = String(readText(base + '/vendor') || '').trim()
-    if (!vendor) continue
-    let driver = ''
-    try { driver = basename(readlinkSync(base + '/driver')) } catch (_) { /* ignore */ }
-    const brand = GPU_VENDORS[vendor] || vendor
-    let name = null
-    if (brand === 'NVIDIA') name = nvidiaProcName()
-    else if (brand === 'AMD') name = firstGroup(readText(base + '/product_name'), /^(.+)$/)
-    if (!name) name = brand + ' GPU' + (driver ? ' · ' + driver : '')
-    return { name, vendor: brand, driver, source: 'drm-sysfs', path: base }
+  for (const path of paths) {
+    if (readText(path + '/utilisation') == null) continue
+    const info = readText(path + '/gpuinfo') || ''
+    const name = firstGroup(info, /(Mali-[A-Za-z0-9]+)/) || 'Mali GPU'
+    return { name, vendor: 'ARM', driver: 'mali', source: 'mali-sysfs', path }
   }
   return null
 }
+
+function gpuFromDrmCard(card) {
+  const base = '/sys/class/drm/' + card + '/device'
+  const uevent = readUevent(base)
+  const pciId = String(uevent.PCI_ID || '').split(':')
+  const vendor = hex(readText(base + '/vendor')) || hex(pciId[0])
+  const device = hex(readText(base + '/device')) || hex(pciId[1])
+  let driver = uevent.DRIVER || ''
+  if (!driver) {
+    try { driver = basename(readlinkSync(base + '/driver')) } catch (_) { /* ignore */ }
+  }
+  if (!driver && !vendor) return null
+  if (VIRTUAL_DRIVERS.has(driver)) return null
+  const brand = PCI_VENDORS[vendor ? '0x' + vendor : ''] || DRIVER_VENDORS[driver] || null
+  if (brand === 'Virtual') return null
+
+  let name = null
+  if (brand === 'NVIDIA') name = nvidiaProcName()
+  if (!name) name = firstGroup(readText(base + '/product_name'), /^(.+)$/)
+  if (!name) name = pciIdsName(vendor, device)
+  if (!name) name = (brand || 'Unknown') + ' GPU' + (driver ? ' · ' + driver : '')
+
+  return {
+    name,
+    vendor: brand || 'GPU',
+    driver,
+    source: 'drm-sysfs',
+    path: base,
+    // 集显通常没有显存/负载指标，排序时放到独显后面
+    rank: brand === 'NVIDIA' || brand === 'AMD' ? 0 : (brand === 'Intel' ? 2 : 1)
+  }
+}
+
+/**
+ * 探测本机显卡。依次尝试：
+ *   1. ARM Mali kbase sysfs（RK3588 / RK3568 这类板子）
+ *   2. /sys/class/drm 下所有 cardN（NVIDIA / AMD / Intel / 高通 / 其他平台显卡）
+ *   3. /proc/driver/nvidia（没有 drm 节点的容器里也能认出 NVIDIA）
+ * 只做识别，不加载任何额外依赖；识别不到返回 null。
+ */
+export function detectGpu() {
+  const mali = maliInfo()
+  if (mali) return mali
+
+  const cards = listDir('/sys/class/drm')
+    .filter((name) => /^card\d+$/.test(name))
+    .map(gpuFromDrmCard)
+    .filter(Boolean)
+    .sort((a, b) => a.rank - b.rank)
+
+  if (cards.length) {
+    const { rank, ...gpu } = cards[0]
+    return gpu
+  }
+
+  const nvidia = nvidiaProcName()
+  if (nvidia) {
+    return { name: nvidia, vendor: 'NVIDIA', driver: 'nvidia', source: 'nvidia-proc', path: null }
+  }
+  return null
+}
+
+/* ---------------- CPU / 内存 ---------------- */
 
 function cpuTimes() {
   let idle = 0
@@ -78,12 +209,27 @@ function cpuTimes() {
   return { idle, total }
 }
 
-// 整盘名：nvme0n1 / sda / vda / hda / xvda / mmcblk0。
-// 分区（sda1、nvme0n1p2、mmcblk0p1）和虚拟设备（loop0、dm-0、zram0、md0）
+/** Linux 的 MemAvailable 才反映真实可用内存；os.freemem() 会把缓存算成已用。 */
+function linuxMemory() {
+  const text = readText('/proc/meminfo')
+  if (!text) return null
+  const kb = (key) => {
+    const m = new RegExp('^' + key + ':\\s+(\\d+)', 'm').exec(text)
+    return m ? Number(m[1]) * 1024 : null
+  }
+  const total = kb('MemTotal')
+  if (!total) return null
+  return { total, available: kb('MemAvailable') }
+}
+
+/* ---------------- 磁盘 ---------------- */
+
+// 整盘名：nvme0n1 / nvme0c0n1 / sda / vda / hda / xvda / mmcblk0 / dasda。
+// 分区（sda1、nvme0n1p2、mmcblk0p1、dasda1）和虚拟设备（loop0、dm-0、zram0、md0）
 // 都不匹配，避免把分区当成整盘算 IO。
-const DISK_NAME_RE = /^(nvme\d+n\d+|sd[a-z]+|vd[a-z]+|hd[a-z]+|xvd[a-z]+|mmcblk\d+)$/
+const DISK_NAME_RE = /^(nvme\d+(?:c\d+)?n\d+|sd[a-z]+|vd[a-z]+|hd[a-z]+|xvd[a-z]+|dasd[a-z]+|mmcblk\d+)$/
 // 分区名 → 整盘名：nvme0n1p2 → nvme0n1，mmcblk0p1 → mmcblk0，sda2 → sda。
-const PARTITION_RE = /^(nvme\d+n\d+|mmcblk\d+|sd[a-z]+|vd[a-z]+|hd[a-z]+|xvd[a-z]+?)p?\d+$/
+const PARTITION_RE = /^(nvme\d+(?:c\d+)?n\d+|mmcblk\d+|sd[a-z]+|vd[a-z]+|hd[a-z]+|xvd[a-z]+?|dasd[a-z]+?)p?\d+$/
 
 /** 把 /dev/xxx、分区名、dm/md 名统一成整盘名；认不出来就返回 null。 */
 export function wholeDiskName(name) {
@@ -103,8 +249,32 @@ function sysfsSlave(name) {
   }
 }
 
-/** /proc/mounts 里挂着 / 的设备，解析到它所在的物理整盘。 */
-function rootDiskName() {
+/** 虚拟设备沿 sysfs slaves 下扎到物理整盘；层数封顶，避免环。 */
+function physicalDiskName(name) {
+  let cur = String(name || '')
+  for (let depth = 0; depth < 4 && /^(dm-|md)/.test(cur); depth++) {
+    const slave = sysfsSlave(cur)
+    if (!slave) break
+    cur = slave
+  }
+  return wholeDiskName(cur)
+}
+
+/** /proc/self/mountinfo 里挂着 / 的 major:minor，再从 /sys/dev/block 解析设备名。 */
+function rootFromMountinfo() {
+  const text = readText('/proc/self/mountinfo')
+  if (!text) return null
+  for (const line of text.split('\n')) {
+    const f = line.trim().split(' ')
+    // id parentid major:minor root mountpoint ...
+    if (f.length < 5 || f[4] !== '/') continue
+    try { return basename(readlinkSync('/sys/dev/block/' + f[2])) } catch (_) { return null }
+  }
+  return null
+}
+
+/** 老内核或受限容器没有 mountinfo 时，退回 /proc/mounts 的设备路径。 */
+function rootFromMounts() {
   const mounts = readText('/proc/mounts')
   if (!mounts) return null
   let source = null
@@ -118,14 +288,25 @@ function rootDiskName() {
     try { source = readlinkSync(source) } catch (_) { return null }
   }
   if (!source.startsWith('/dev/')) return null   // overlay / tmpfs / zfs 等
-  let name = source.slice(5)
-  // LVM(dm-N) / RAID(mdN) 再往下扎到物理盘；层数封顶，避免环
-  for (let depth = 0; depth < 3 && /^(dm-|md)/.test(name); depth++) {
-    const slave = sysfsSlave(name)
-    if (!slave) break
-    name = slave
+  return source.slice(5)
+}
+
+/** / 所在的物理整盘；overlay/tmpfs/zfs 这类没有对应块设备时返回 null。 */
+function rootDiskName() {
+  const name = rootFromMountinfo() || rootFromMounts()
+  return name ? physicalDiskName(name) : null
+}
+
+/** 认不出 / 的设备时的候选：第一块不可移动、容量非零的整盘。 */
+function firstPhysicalDisk() {
+  for (const name of listDir('/sys/block').sort()) {
+    if (!DISK_NAME_RE.test(name)) continue
+    if (String(readText('/sys/block/' + name + '/removable') || '').trim() === '1') continue
+    const size = readNumber('/sys/block/' + name + '/size')
+    if (size === 0) continue
+    return name
   }
-  return wholeDiskName(name)
+  return null
 }
 
 export function parseDiskstats(text, preferred = null) {
@@ -156,11 +337,13 @@ function parseNetdev(text) {
   if (!text) return null
   let rx = 0
   let tx = 0
+  // 跳过回环、容器网桥和隧道：这些接口会把同一份流量重复计算。
+  const skip = /^(lo|docker|br-|veth|virbr|vmnet|vboxnet|tun|tap|wg|zt|tailscale|cni|flannel|kube|lxc|lxd|incus|podman|cali|weave|dummy|sit)/
   for (const line of text.split('\n')) {
     const m = line.match(/^\s*([^:]+):\s*(.*)$/)
     if (!m) continue
     const name = m[1].trim()
-    if (name === 'lo' || /^(docker|br-|veth|virbr)/.test(name)) continue
+    if (skip.test(name)) continue
     const cols = m[2].trim().split(/\s+/).map(Number)
     rx += cols[0] || 0
     tx += cols[8] || 0
@@ -178,6 +361,8 @@ export function perCoreUsage(curCores, prevCores) {
     return dt > 0 ? round(clamp((1 - di / dt) * 100, 0, 100)) : 0
   })
 }
+
+/* ---------------- 采样 ---------------- */
 
 export function createMetrics() {
   const gpuDevice = detectGpu()
@@ -250,8 +435,9 @@ export function createMetrics() {
     state.cpuCores = perCoreUsage(curCores, prevCores)
     prevCores = curCores
 
-    const totalMem = os.totalmem()
-    const freeMem = os.freemem()
+    const mem = process.platform === 'linux' ? linuxMemory() : null
+    const totalMem = (mem && mem.total) || os.totalmem()
+    const freeMem = mem && mem.available != null ? mem.available : os.freemem()
     state.ram = round(((totalMem - freeMem) / totalMem) * 100)
     state.ramDetail = {
       usedGB: round((totalMem - freeMem) / 1073741824, 1),
@@ -260,7 +446,8 @@ export function createMetrics() {
     state.uptimeSec = Math.round(os.uptime())
 
     if (process.platform === 'linux') {
-      const rec = parseDiskstats(readText('/proc/diskstats'), rootDiskName())
+      const preferred = rootDiskName() || firstPhysicalDisk()
+      const rec = parseDiskstats(readText('/proc/diskstats'), preferred)
       if (rec) {
         if (prevDisk && prevDisk.name === rec.name) {
           const dt = (now - prevDisk.t) / 1000
@@ -291,28 +478,27 @@ export function createMetrics() {
           memoryTotalMB: null,
           source: 'mali-sysfs'
         }
+      } else if (gpuDevice.vendor === 'NVIDIA') {
+        state.gpu = {
+          name: (nvidiaStats && nvidiaStats.name) || gpuDevice.name,
+          utilization: nvidiaStats ? nvidiaStats.utilization : null,
+          memoryUsedMB: nvidiaStats ? nvidiaStats.memoryUsedMB : null,
+          memoryTotalMB: nvidiaStats ? nvidiaStats.memoryTotalMB : null,
+          source: nvidiaStats ? 'nvidia-smi' : gpuDevice.source
+        }
+        pollNvidia(gpuDevice)
       } else {
-        // AMD(amdgpu) / Intel(i915) 的利用率与显存在 sysfs 里；NVIDIA 走 nvidia-smi
-        const util = gpuDevice.vendor === 'AMD' ? readNumber(gpuDevice.path + '/gpu_busy_percent') : null
-        const used = gpuDevice.vendor === 'AMD' ? readNumber(gpuDevice.path + '/mem_info_vram_used') : null
-        const total = gpuDevice.vendor === 'AMD' ? readNumber(gpuDevice.path + '/mem_info_vram_total') : null
-        if (gpuDevice.vendor === 'NVIDIA') {
-          state.gpu = {
-            name: (nvidiaStats && nvidiaStats.name) || gpuDevice.name,
-            utilization: nvidiaStats ? nvidiaStats.utilization : null,
-            memoryUsedMB: nvidiaStats ? nvidiaStats.memoryUsedMB : null,
-            memoryTotalMB: nvidiaStats ? nvidiaStats.memoryTotalMB : null,
-            source: nvidiaStats ? 'nvidia-smi' : gpuDevice.source
-          }
-          pollNvidia(gpuDevice)
-        } else {
-          state.gpu = {
-            name: gpuDevice.name,
-            utilization: util == null ? null : clamp(util, 0, 100),
-            memoryUsedMB: toMB(used),
-            memoryTotalMB: toMB(total),
-            source: gpuDevice.source
-          }
+        // AMD(amdgpu) / Intel / 其他厂商：有标准 sysfs 指标就读，没有就显示 “—”
+        const base = gpuDevice.path || ''
+        const util = readNumber(base + '/gpu_busy_percent')
+        const used = readNumber(base + '/mem_info_vram_used')
+        const total = readNumber(base + '/mem_info_vram_total')
+        state.gpu = {
+          name: gpuDevice.name,
+          utilization: util == null ? null : clamp(util, 0, 100),
+          memoryUsedMB: toMB(used),
+          memoryTotalMB: toMB(total),
+          source: gpuDevice.source
         }
       }
 

@@ -6,7 +6,7 @@ import { createMetrics } from './src/metrics.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.22'
+const VERSION = '0.8.23'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -18,6 +18,20 @@ const now = () => Date.now()
 const round = (n, d = 1) => {
   const p = 10 ** d
   return Math.round(n * p) / p
+}
+
+// 列表条数的边界：工具面板最多 15 行（再挤下去每行不足 9px），
+// 代理面板沿用原版 12 行上限；两者默认都是 8 行。
+const TOOL_ROWS_DEFAULT = 8
+const TOOL_ROWS_MIN = 3
+const TOOL_ROWS_MAX = 15
+const AGENT_ROWS_DEFAULT = 8
+const AGENT_ROWS_MIN = 3
+const AGENT_ROWS_MAX = 12
+
+const clampInt = (value, lo, hi, fallback) => {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : fallback
 }
 
 /** @param {import('@ekko-studio/plugin-sdk').PluginContext} ctx */
@@ -244,6 +258,8 @@ export function apply(ctx) {
       anim: saved.anim !== false,
       compat: !!saved.compat,
       gpu: saved.gpu !== false,
+      toolRows: clampInt(saved.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
+      agentRows: clampInt(saved.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : ''
     }
   })
@@ -253,6 +269,8 @@ export function apply(ctx) {
       anim: input.anim !== false,
       compat: !!input.compat,
       gpu: input.gpu !== false,
+      toolRows: clampInt(input.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
+      agentRows: clampInt(input.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : ''
     })
     return { ok: true }

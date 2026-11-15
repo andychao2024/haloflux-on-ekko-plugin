@@ -26,6 +26,10 @@ test('partition names resolve to their whole disk', () => {
   assert.equal(wholeDiskName('mmcblk0p1'), 'mmcblk0')
   assert.equal(wholeDiskName('/dev/vda1'), 'vda')
   assert.equal(wholeDiskName('nvme0n1'), 'nvme0n1')
+  // 多控制器 NVMe、S390 DASD、eMMC 的整盘/分区也要认出来
+  assert.equal(wholeDiskName('nvme0c0n1p2'), 'nvme0c0n1')
+  assert.equal(wholeDiskName('dasda1'), 'dasda')
+  assert.equal(wholeDiskName('mmcblk0'), 'mmcblk0')
   assert.equal(wholeDiskName('dm-0'), null)
   assert.equal(wholeDiskName('overlay'), null)
 })

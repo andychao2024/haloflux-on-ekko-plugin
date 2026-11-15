@@ -63,12 +63,19 @@ const shim = `
     }
   });
 
-  var settings = { anim: true, fps: 30, gpu: true };
+  var settings = { anim: true, fps: 30, gpu: true, toolRows: 8, agentRows: 8 };
   var seq = 0, pending = {};
+  function rowLimit(value, lo, hi) {
+    var n = Number(value);
+    return isFinite(n) ? Math.max(lo, Math.min(hi, Math.round(n))) : 8;
+  }
   function applySettings(v) {
     settings = Object.assign({}, settings, v || {});
     /* 显卡是否显示：ai-link.js 每帧读这个开关，下一帧就生效 */
     window.__hlShowGpu = settings.gpu !== false;
+    /* 工具调用/代理调度显示条数：同样每帧读取，保存后无需重载页面 */
+    window.__hlToolRows = rowLimit(settings.toolRows, 3, 15);
+    window.__hlAgentRows = rowLimit(settings.agentRows, 3, 12);
     if (window.__stageSetFps) window.__stageSetFps(settings.fps === 60 ? 60 : 30);
     if (window.__stagePause) {
       window.__stagePause(settings.anim === false || document.visibilityState === 'hidden');

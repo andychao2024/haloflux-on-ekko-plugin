@@ -7,6 +7,14 @@
  *   3. 下发动效开关与帧率设置
  */
 
+// 与 server.mjs 的边界保持一致；页面端再夹一次，避免旧设置或手改数据越界。
+const MAX_TOOL_ROWS = 15
+const MAX_AGENT_ROWS = 12
+function clampInt(value, lo, hi, fallback) {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : fallback
+}
+
 function pageWithTitle(html, title) {
   const clean = String(title || '').trim()
   if (!clean) return html
@@ -21,7 +29,7 @@ export async function mount(root, ctx) {
 
   // 宿主侧 RPC 没有超时：通道没建立或请求挂住时，await 会永远不返回，
   // 面板就停在空白。这里最多等 3 秒，拿不到就先按默认设置渲染。
-  const DEFAULTS = { anim: true, compat: false, gpu: true, title: '' }
+  const DEFAULTS = { anim: true, compat: false, gpu: true, toolRows: 8, agentRows: 8, title: '' }
   const settings = await Promise.race([
     ctx.rpc.call('get-settings').catch(() => null),
     new Promise((resolve) => setTimeout(() => resolve(null), 3000))
@@ -29,6 +37,8 @@ export async function mount(root, ctx) {
   const anim = !(settings && settings.anim === false)
   const compat = !!(settings && settings.compat)
   const gpu = !(settings && settings.gpu === false)
+  const toolRows = clampInt(settings && settings.toolRows, 3, 15, 8)
+  const agentRows = clampInt(settings && settings.agentRows, 3, 12, 8)
   const title = (settings && typeof settings.title === 'string') ? settings.title.trim() : ''
 
   const style = document.createElement('style')
@@ -151,7 +161,7 @@ export async function mount(root, ctx) {
           at: Date.now(), ageSec: 0, agent: slot.agent, callId,
           name: toolName, arg: clipText(arg, 160), state: 'running'
         })
-        while (liveTools.length > 8) liveTools.pop()
+        while (liveTools.length > MAX_TOOL_ROWS) liveTools.pop()
       } else {
         // 完成/失败要落到同一条调用上，面板才会从青色变为灰色/红色
         const hit = (callId && liveTools.find((tool) => tool.callId === callId && tool.state === 'running')) ||
@@ -256,7 +266,7 @@ export async function mount(root, ctx) {
           at: Date.now(),
           agent: meta.agent || 'unknown'
         })
-        const entries = parseToolMessages(messages, 8, Date.now())
+        const entries = parseToolMessages(messages, MAX_TOOL_ROWS, Date.now())
           .map((item) => Object.assign({}, item, { agent: meta.agent || 'unknown' }))
         toolBackfill.set(meta.id, { at: Date.now(), entries })
       }).catch(() => { /* ignore */ }).finally(() => toolBusy.delete(meta.id))
@@ -330,7 +340,7 @@ export async function mount(root, ctx) {
           item.name === tool.name && (item.arg || '') === (tool.arg || '') &&
           Math.abs((item.at || 0) - (tool.at || 0)) < 15000)
         if (!dup) merged.push(tool)
-        if (merged.length >= 8) break
+        if (merged.length >= MAX_TOOL_ROWS) break
       }
       ai.recentTools = merged
       ai.toolAgents = [...new Set(merged.map((t) => t.agent).filter(Boolean))]
@@ -402,7 +412,7 @@ export async function mount(root, ctx) {
   }
 
   if (typeof window.__hlApplySettings === 'function') {
-    window.__hlApplySettings({ anim, compat, gpu })
+    window.__hlApplySettings({ anim, compat, gpu, toolRows, agentRows })
   }
 
   refreshRate()
@@ -425,8 +435,9 @@ function mountSettings(root, ctx) {
   style.textContent = `
     .hls { font:12px/1.6 ui-monospace,Consolas,monospace; padding:20px; max-width:720px; display:flex; flex-direction:column; gap:14px; }
     .hls label { display:flex; gap:10px; align-items:center; }
-    .hls select { font:inherit; padding:3px 8px; border-radius:6px; background:rgba(255,255,255,.06);
-      color:inherit; border:1px solid rgba(255,255,255,.2); }
+    .hls select, .hls input[type=number] { font:inherit; padding:3px 8px; border-radius:6px;
+      background:rgba(255,255,255,.06); color:inherit; border:1px solid rgba(255,255,255,.2); }
+    .hls input[type=number] { width:68px; }
     .hls button { font:inherit; padding:5px 12px; border-radius:6px; border:1px solid rgba(255,255,255,.2);
       background:rgba(255,255,255,.06); color:inherit; cursor:pointer; }
     .hls .muted { color:var(--text-secondary,#9aa0aa); }
@@ -443,6 +454,14 @@ function mountSettings(root, ctx) {
     </label>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式，默认开启）</label>
     <label><input type="checkbox" id="hls-gpu"> 显示显卡（GPU 曲线与显存，默认开启；未检测到显卡时不显示）</label>
+    <label>工具调用显示条数
+      <input id="hls-tool-rows" type="number" min="3" max="15" step="1" value="8">
+      <span class="muted">默认 8，可设 3–15</span>
+    </label>
+    <label>代理调度显示行数
+      <input id="hls-agent-rows" type="number" min="3" max="12" step="1" value="8">
+      <span class="muted">默认 8，可设 3–12（超出的 Agent 在末行轮换）</span>
+    </label>
     <label><input type="checkbox" id="hls-compat"> 兼容模式（DPR=1，关闭 will-change 与 CSS 动画）</label>
     <div><button id="hls-save">保存</button> <span class="muted" id="hls-msg"></span></div>
     <div class="muted">页面与动效来自 HALOFLUX 原作；数据来自 Studio 会话/用量接口与本机指标。插件只读，不读取数据库文件，不发外部网络请求。</div>
@@ -458,12 +477,16 @@ function mountSettings(root, ctx) {
   const animBox = wrap.querySelector('#hls-anim')
   const gpuBox = wrap.querySelector('#hls-gpu')
   const compatBox = wrap.querySelector('#hls-compat')
+  const toolRowsBox = wrap.querySelector('#hls-tool-rows')
+  const agentRowsBox = wrap.querySelector('#hls-agent-rows')
   const titleInput = wrap.querySelector('#hls-title')
   const msg = wrap.querySelector('#hls-msg')
   ctx.rpc.call('get-settings').then((s) => {
     animBox.checked = !(s && s.anim === false)
     gpuBox.checked = !(s && s.gpu === false)
     compatBox.checked = !!(s && s.compat)
+    toolRowsBox.value = String(clampInt(s && s.toolRows, 3, MAX_TOOL_ROWS, 8))
+    agentRowsBox.value = String(clampInt(s && s.agentRows, 3, MAX_AGENT_ROWS, 8))
     titleInput.value = (s && s.title) || ''
   }).catch(() => { animBox.checked = true; gpuBox.checked = true })
   wrap.querySelector('#hls-save').onclick = async () => {
@@ -472,6 +495,8 @@ function mountSettings(root, ctx) {
         anim: !!animBox.checked,
         gpu: !!gpuBox.checked,
         compat: !!compatBox.checked,
+        toolRows: clampInt(toolRowsBox.value, 3, MAX_TOOL_ROWS, 8),
+        agentRows: clampInt(agentRowsBox.value, 3, MAX_AGENT_ROWS, 8),
         title: titleInput.value.trim()
       })
       msg.textContent = '已保存，重新打开看板生效'

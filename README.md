@@ -9,7 +9,7 @@
 - HUD：会话、模型、今日用量、速率、命中率、工具、消息、CPU、硬盘、运行时长、技能、7 日趋势
 - 8 个面板：事件流 / 吞吐 / 思考过程 / CPU-磁盘 / 任务计划 / 工具 / 代理调度 / 系统负载
 - 状态片：最少 3、最多 5、6 秒轮换、点击锁定
-- 设置：看板标题、动效开关、兼容模式
+- 设置：看板标题、动效开关、兼容模式、显卡显示开关、工具调用/代理调度显示条数
 - 跟随 Studio 主题容器、桌面与手机自适应
 
 ## 数据来源
@@ -24,7 +24,7 @@
 | 实时思考 / 工具 / 任务计划 | 页面端 `ctx.host.sessions.connect` |
 | 历史思考回看 | 页面端 `ctx.host.sessions.messages`（最近 3 个会话） |
 | 技能 | `ctx.host.request('/api/hermes/skills/usage/stats')` |
-| CPU / 内存 / 磁盘 / 网络 / GPU | 插件后端的 Node `os`、`/proc`、`/sys/class/drm`、Mali sysfs、`nvidia-smi` |
+| CPU / 内存 / 磁盘 / 网络 / GPU | 插件后端的 Node `os`、`/proc`（`meminfo`、`self/mountinfo`、`diskstats`、`net/dev`）、`/sys/class/drm`、`/sys/block`、Mali sysfs、`nvidia-smi` |
 
 实时连接使用**查看者自己的身份**建立，服务端不使用管理员身份代读会话。权限仅 `api.read` + `ui`。
 
@@ -34,7 +34,9 @@
 - 技能“使用中”：接口只有 7 日聚合，没有单次调用时间
 - 思考回看：只补最近 3 个会话的最后一条，不做完整历史
 - 非 Linux 平台：磁盘/网络/GPU 显示 `—`
-- 显卡：NVIDIA（型号读 `/sys/class/drm`，利用率/显存读 `nvidia-smi`）、AMD（`gpu_busy_percent` / `mem_info_vram_*`）、ARM Mali（kbase sysfs）；Intel 只识别型号。可在插件设置里关闭显示（默认开启）
+- 显卡：通用识别 `/sys/class/drm` 下的 NVIDIA / AMD / Intel / 高通 / ARM / Broadcom；NVIDIA 利用率读 `nvidia-smi`，AMD 读 `gpu_busy_percent` 与 `mem_info_vram_*`，ARM Mali 读 kbase sysfs，其他厂商只识别型号。虚拟显卡（virtio、VMware、QXL 等）没有负载指标，默认跳过。可在插件设置里关闭显示（默认开启）
+- 磁盘：优先采样 `/` 所在的物理盘（`/proc/self/mountinfo` → `/sys/dev/block`，LVM/RAID 沿 sysfs 下扎）；容器里看不到根设备时，退回第一块不可移动的整盘
+- 工具调用 / 代理调度：显示条数可在插件设置里调整，默认 8；工具 3–15 条，代理 3–12 行
 - 归档会话不计入累计令牌与消息数
 
 ## 安装

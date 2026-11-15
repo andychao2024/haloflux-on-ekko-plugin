@@ -125,6 +125,12 @@
 
   var noop = function () {};
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+  /* Studio 插件设置：工具调用/代理调度显示条数。
+     页面每帧读取 window.__hl*Rows，保存设置后不用重新打开看板；边界与插件设置一致。 */
+  function rowLimit(name, lo, hi) {
+    var n = Number(window[name]);
+    return isFinite(n) ? Math.max(lo, Math.min(hi, Math.round(n))) : 8;
+  }
   function isNum(v) { return typeof v === 'number' && isFinite(v); }
 
   function fmtInt(n) {
@@ -2493,9 +2499,8 @@
       return String(a.agent || '').localeCompare(String(b.agent || ''));
     });
 
-    // 可视行数跟着面板高度走：1600 宽约 9 行，窄屏/矮面板少一些，最少 4 行
-    var h = p.el.clientHeight || 0;
-    var maxRows = Math.max(4, Math.min(AG_MAX_ROWS, Math.floor(h / 15)));
+    // 显示行数由插件设置决定（默认 8，范围 3–12）；超出的 Agent 在末行轮换
+    var maxRows = Math.max(3, Math.min(AG_MAX_ROWS, rowLimit('__hlAgentRows', 3, AG_MAX_ROWS)));
     var wrap = list.length > maxRows;
     var shown = list.slice(0, maxRows);
     if (wrap) {
@@ -2704,7 +2709,10 @@
         label(o.x, nCores + ' 核 · 内存 ' + fmtPct(d && d.ram) + ' · 每秒采样', 2, o.h - 10, '#5c6068');
       }
     } else if (p.index === 5) {       // 正在运行的 Agent：最近工具调用
-      var list = (ai.recentTools || []).slice(0, 8);
+      var wantRows = rowLimit('__hlToolRows', 3, 15);
+      // 面板高度放不下时按行数上限缩，保证设置条数不会把最后几行裁掉
+      var fitRows = Math.max(1, Math.floor((o.h - 14) / 10));
+      var list = (ai.recentTools || []).slice(0, Math.min(wantRows, fitRows));
       var src = toolSourceLabel(ai);
       var showAgent = list.length && ai.toolAgents && ai.toolAgents.length > 1;
       if (src) label(o.x, src, 2, 1, '#98e0cf');
@@ -2716,7 +2724,8 @@
       if (!list.length) {
         label(o.x, '当前没有工具调用', 2, Math.max(20, o.h / 2 - 6), '#4a4f57');
       } else {
-        var y0 = 14, lh = Math.max(10, Math.min(13, (o.h - y0 - 2) / 8));
+        // 行高压在 9–13px：设置的行数多时自动压缩，而不是把最后几行挤出面板
+        var y0 = 14, lh = Math.max(9, Math.min(13, (o.h - y0 - 2) / Math.max(1, list.length)));
         var rows = Math.min(list.length, Math.floor((o.h - y0) / lh));
         for (var ti = 0; ti < rows; ti++) {
           var t = list[ti] || {};

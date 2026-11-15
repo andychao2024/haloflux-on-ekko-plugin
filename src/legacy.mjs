@@ -16,9 +16,10 @@ export function buildLegacyStats(snap, host, version) {
   const plans = (snap.taskPlan && Array.isArray(snap.taskPlan.plans)) ? snap.taskPlan.plans : []
   const tools = Array.isArray(snap.tools) ? snap.tools : []
   const backfillTools = Array.isArray(snap.backfillTools) ? snap.backfillTools : []
+  // 多取一些：页面按用户设置的条数（默认 8，上限 15）自行裁剪。
   const recentTools = tools.concat(backfillTools)
     .sort((a, b) => (b.at || 0) - (a.at || 0))
-    .slice(0, 8)
+    .slice(0, 15)
   // Studio 的会话列表通常不填 tool_call_count；至少让计数与“最近 8 条”一致，
   // 避免 KPI 永远显示 0。
   const toolCallsTotal = Math.max(

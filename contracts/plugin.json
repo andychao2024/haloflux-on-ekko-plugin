@@ -29,6 +29,18 @@
           "type": "boolean",
           "description": "在看板里显示显卡（GPU）曲线与显存信息；默认 true。"
         },
+        "toolRows": {
+          "type": "integer",
+          "description": "工具调用面板显示的条数；默认 8，最小 3，最大 15。超出范围的取值按边界保存。",
+          "minimum": 3,
+          "maximum": 15
+        },
+        "agentRows": {
+          "type": "integer",
+          "description": "代理调度面板显示的行数；默认 8，最小 3，最大 12。超出范围的取值按边界保存。",
+          "minimum": 3,
+          "maximum": 12
+        },
         "title": {
           "type": "string",
           "description": "看板左上角标题；空字符串使用默认标题。",
@@ -36,10 +48,12 @@
         }
       },
       "required": [
+        "agentRows",
         "anim",
         "compat",
         "gpu",
-        "title"
+        "title",
+        "toolRows"
       ],
       "additionalProperties": false
     },
