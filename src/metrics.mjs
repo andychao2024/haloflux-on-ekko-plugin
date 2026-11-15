@@ -1,5 +1,5 @@
 import os from 'node:os'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, readlinkSync } from 'node:fs'
 
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
 const round = (n, d = 1) => {
@@ -22,14 +22,66 @@ function cpuTimes() {
   return { idle, total }
 }
 
-function parseDiskstats(text) {
+// 整盘名：nvme0n1 / sda / vda / hda / xvda / mmcblk0。
+// 分区（sda1、nvme0n1p2、mmcblk0p1）和虚拟设备（loop0、dm-0、zram0、md0）
+// 都不匹配，避免把分区当成整盘算 IO。
+const DISK_NAME_RE = /^(nvme\d+n\d+|sd[a-z]+|vd[a-z]+|hd[a-z]+|xvd[a-z]+|mmcblk\d+)$/
+// 分区名 → 整盘名：nvme0n1p2 → nvme0n1，mmcblk0p1 → mmcblk0，sda2 → sda。
+const PARTITION_RE = /^(nvme\d+n\d+|mmcblk\d+|sd[a-z]+|vd[a-z]+|hd[a-z]+|xvd[a-z]+?)p?\d+$/
+
+/** 把 /dev/xxx、分区名、dm/md 名统一成整盘名；认不出来就返回 null。 */
+export function wholeDiskName(name) {
+  const base = String(name || '').replace(/^\/dev\//, '')
+  if (!base) return null
+  if (DISK_NAME_RE.test(base)) return base
+  const m = PARTITION_RE.exec(base)
+  return m ? m[1] : null
+}
+
+/** dm-0 / md0 这类虚拟设备的第一个底层设备名（读 sysfs slaves）。 */
+function sysfsSlave(name) {
+  try {
+    return readdirSync('/sys/class/block/' + name + '/slaves')[0] || null
+  } catch (_) {
+    return null
+  }
+}
+
+/** /proc/mounts 里挂着 / 的设备，解析到它所在的物理整盘。 */
+function rootDiskName() {
+  const mounts = readText('/proc/mounts')
+  if (!mounts) return null
+  let source = null
+  for (const line of mounts.split('\n')) {
+    const f = line.trim().split(/\s+/)
+    if (f.length >= 2 && f[1] === '/') { source = f[0]; break }
+  }
+  if (!source) return null
+  // /dev/mapper/vg-root 是符号链接，先换成 /dev/dm-N
+  if (source.startsWith('/dev/mapper/')) {
+    try { source = readlinkSync(source) } catch (_) { return null }
+  }
+  if (!source.startsWith('/dev/')) return null   // overlay / tmpfs / zfs 等
+  let name = source.slice(5)
+  // LVM(dm-N) / RAID(mdN) 再往下扎到物理盘；层数封顶，避免环
+  for (let depth = 0; depth < 3 && /^(dm-|md)/.test(name); depth++) {
+    const slave = sysfsSlave(name)
+    if (!slave) break
+    name = slave
+  }
+  return wholeDiskName(name)
+}
+
+export function parseDiskstats(text, preferred = null) {
   if (!text) return null
-  let best = null
+  // 优先取系统盘（/ 所在的那块盘）的统计：第一块盘可能是外接 U 盘或数据盘，
+  // 按枚举顺序取会张冠李戴；找不到系统盘才退回第一块整盘。
+  let first = null
   for (const line of text.split('\n')) {
     const f = line.trim().split(/\s+/)
     if (f.length < 14) continue
     const name = f[2]
-    if (!/^(nvme\d+n\d+|sd[a-z]+|vd[a-z]+|mmcblk\d+)$/.test(name)) continue
+    if (!DISK_NAME_RE.test(name)) continue
     const rec = {
       name,
       reads: Number(f[3]) || 0,
@@ -38,10 +90,10 @@ function parseDiskstats(text) {
       writeSectors: Number(f[9]) || 0,
       ioMs: Number(f[12]) || 0
     }
-    if (/^nvme/.test(name)) return rec
-    best = best || rec
+    if (preferred && name === preferred) return rec
+    first = first || rec
   }
-  return best
+  return first
 }
 
 function parseNetdev(text) {
@@ -118,7 +170,7 @@ export function createMetrics() {
     state.uptimeSec = Math.round(os.uptime())
 
     if (process.platform === 'linux') {
-      const rec = parseDiskstats(readText('/proc/diskstats'))
+      const rec = parseDiskstats(readText('/proc/diskstats'), rootDiskName())
       if (rec) {
         if (prevDisk && prevDisk.name === rec.name) {
           const dt = (now - prevDisk.t) / 1000

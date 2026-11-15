@@ -2674,7 +2674,9 @@
       if (lastCpu) { o.x.fillStyle = '#ffb3b3'; o.x.fillRect(o.w - 3, lastCpu.y - 1.5, 3, 3); }
       var cpuTxt3 = 'CPU ' + fmtPct(d && d.cpu);
       var gpuTxt3 = 'GPU ' + (gpuNow === null ? '—' : fmtPct(gpuNow));
-      var diskTxt3 = 'NVMe ' + (diskNow === null ? '—' : fmtPct(diskNow));
+      // 设备名由服务端按“第一块整盘”给出（可能是 nvme0n1，也可能是 sda），不要写死 NVMe
+      var diskTag3 = (d && d.disk && d.disk.device) ? String(d.disk.device) : '磁盘';
+      var diskTxt3 = diskTag3 + ' ' + (diskNow === null ? '—' : fmtPct(diskNow));
       label(o.x, cpuTxt3, 2, 2, '#ff6b6b');
       o.x.font = FONT_SM;
       // 图例顺序：左 CPU、中 NVMe、右 GPU
@@ -3552,13 +3554,13 @@
         value: fmtPct(d.cpu) +
           (d.disk && isNum(d.disk.utilization) ? ' / ' + fmtPct(d.disk.utilization) : '') +
           ' / ' + (d.gpu ? fmtPct(d.gpu.utilization) : '不可用'),
-        sub: '红 CPU · 蓝 NVMe IO · 紫 GPU（0% 时隐藏）',
+        sub: '红 CPU · 蓝磁盘 IO · 紫 GPU（0% 时隐藏）',
         lines: [
           '处理器：<b>' + esc(String(d.cpuName || '—').slice(0, 26)) + '</b>',
           '核心：<b>' + (cores.length || (d.server && d.server.cores) || '—') + ' 核</b> · 最高 <b>' +
             (cores.length ? mx + '%' : '—') + '</b> · 平均 <b>' + (cores.length ? Math.round(sum / cores.length) + '%' : '—') + '</b>',
           '内存：<b>' + fmtPct(d.ram) + '</b>' + (d.ramDetail ? '（' + d.ramDetail.usedGB + ' / ' + d.ramDetail.totalGB + ' GB）' : ''),
-          'NVMe：<b>' + (d.disk && isNum(d.disk.utilization) ? fmtPct(d.disk.utilization) : '不可用') + '</b>' +
+          '磁盘：<b>' + (d.disk && isNum(d.disk.utilization) ? fmtPct(d.disk.utilization) : '不可用') + '</b>' +
             (d.disk && d.disk.device ? ' · ' + esc(d.disk.device) : '') +
             (d.disk && isNum(d.disk.readMBps) ? ' · 读 ' + fmtRate(d.disk.readMBps) + ' / 写 ' + fmtRate(d.disk.writeMBps) + ' MB/s' : ''),
           '显存：<b>' + (d.gpu && isNum(d.gpu.memoryUsedMB) && isNum(d.gpu.memoryTotalMB)
@@ -3633,7 +3635,7 @@
       label: '系统负载索引', value: 'CPU / 硬盘IO / 内存 / 网络', sub: '4 行 × 60 秒热力图',
       lines: [
         '<i>红</i> 第 1 行 CPU：<b>' + fmtPct(d.cpu) + '</b>',
-        '<i>蓝</i> 第 2 行 ' + (d.disk && d.disk.device ? esc(d.disk.device) : 'NVMe IO') + '：<b>' +
+        '<i>蓝</i> 第 2 行 ' + (d.disk && d.disk.device ? esc(d.disk.device) : '磁盘 IO') + '：<b>' +
           (d.disk && isNum(d.disk.utilization) ? fmtPct(d.disk.utilization) : '不可用') + '</b>' +
           (d.disk && isNum(d.disk.readMBps)
             ? ' · 读 ' + fmtRate(d.disk.readMBps) + ' / 写 ' + fmtRate(d.disk.writeMBps) + ' MB/s'

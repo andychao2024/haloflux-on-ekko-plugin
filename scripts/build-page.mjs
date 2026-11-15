@@ -30,8 +30,8 @@ function mustReplace(text, from, to, label) {
 let aiPatched = ai
 aiPatched = mustReplace(aiPatched, "'CPU / GPU 负载'", "'CPU / 磁盘 IO'", 'CPU/GPU 面板标题')
 aiPatched = mustReplace(aiPatched,
-  '红 CPU · 蓝 NVMe IO · 紫 GPU（0% 时隐藏）',
-  '红 CPU · 蓝 NVMe IO', 'CPU/GPU 悬浮说明')
+  '红 CPU · 蓝磁盘 IO · 紫 GPU（0% 时隐藏）',
+  '红 CPU · 蓝磁盘 IO', 'CPU/GPU 悬浮说明')
 aiPatched = mustReplace(aiPatched,
   'var gpuNow = (d && d.gpu && isNum(d.gpu.utilization)) ? d.gpu.utilization : null;',
   'var gpuNow = null;', 'GPU 采样')

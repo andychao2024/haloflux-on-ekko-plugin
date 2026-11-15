@@ -19,7 +19,13 @@ function pageWithTitle(html, title) {
 export async function mount(root, ctx) {
   if (ctx.view === 'settings') return mountSettings(root, ctx)
 
-  const settings = await ctx.rpc.call('get-settings').catch(() => ({ anim: true, compat: false, title: '' }))
+  // 宿主侧 RPC 没有超时：通道没建立或请求挂住时，await 会永远不返回，
+  // 面板就停在空白。这里最多等 3 秒，拿不到就先按默认设置渲染。
+  const DEFAULTS = { anim: true, compat: false, title: '' }
+  const settings = await Promise.race([
+    ctx.rpc.call('get-settings').catch(() => null),
+    new Promise((resolve) => setTimeout(() => resolve(null), 3000))
+  ]).then((s) => (s && typeof s === 'object' ? s : DEFAULTS))
   const anim = !(settings && settings.anim === false)
   const compat = !!(settings && settings.compat)
   const title = (settings && typeof settings.title === 'string') ? settings.title.trim() : ''

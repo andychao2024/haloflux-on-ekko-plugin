@@ -6,7 +6,7 @@ import { createMetrics } from './src/metrics.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.20'
+const VERSION = '0.8.21'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -194,8 +194,10 @@ export function apply(ctx) {
       net: metrics.state.net,
       uptimeSec: metrics.state.uptimeSec
     }
-    if (now() - store.usage.fetchedAt > 60000) pollUsage(run)
-    if (now() - store.skills.fetchedAt > 60000) pollSkills(run)
+    // 必须 await：RPC 返回时 run.signal 会中止，没 await 的请求会被取消
+    // （日志里表现为 “operation was aborted”）。与 stats 保持一致。
+    if (now() - store.usage.fetchedAt > 60000) await pollUsage(run)
+    if (now() - store.skills.fetchedAt > 60000) await pollSkills(run)
     return snap
   })
 
