@@ -6,9 +6,11 @@ import { createStore } from './src/store.mjs'
 import { createMetrics } from './src/metrics.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 import { startWallpaperServer } from './src/wallpaper-server.mjs'
+import { parseLiveEvent } from './src/live-signals.mjs'
+import { parseToolMessages } from './src/tool-history.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.28'
+const VERSION = '0.8.29'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -89,7 +91,107 @@ export function apply(ctx) {
     wallpaper = null
     wallpaperPort = 0
     wallpaperTokenCurrent = ''
+    stopWallpaperLive()
     try { await current.close() } catch (_) { /* ignore */ }
+  }
+
+  const liveHandles = new Map()
+  let liveTimer = 0
+  let wallpaperWatchAt = 0
+  let liveToolAt = 0
+
+  function onWallpaperEvent(sessionId, event) {
+    const action = parseLiveEvent(event)
+    if (!action) return
+    const at = now()
+    store.noteSignal(sessionId, at)
+    if (action.kind === 'delta') {
+      store.appendDelta(sessionId, action.channel, action.text)
+      store.setWorking(sessionId, true)
+    } else if (action.kind === 'tool') {
+      store.setWorking(sessionId, true, { lastToolAt: at })
+      if (action.state === 'running') {
+        store.noteTool(sessionId, {
+          name: action.name, arg: action.arg, state: 'running', callId: action.callId
+        })
+      } else {
+        store.finishTool(sessionId, action.callId, action.name, action.state)
+      }
+    } else if (action.kind === 'run') {
+      store.setWorking(sessionId, action.working)
+    } else if (action.kind === 'plan') {
+      store.setPlan(sessionId, action.plan)
+    } else if (action.kind === 'resume') {
+      store.setWorking(sessionId, action.working)
+      if (action.plans[0]) store.setPlan(sessionId, action.plans[0])
+    }
+  }
+
+  async function ensureLiveConnections() {
+    if (!ctx.host || !ctx.host.sessions || typeof ctx.host.sessions.connect !== 'function') return
+    const recent = store.snapshot(null).recentSessions.slice(0, 4)
+    const keep = new Set(recent.map((meta) => meta.id))
+    for (const [id, handle] of [...liveHandles]) {
+      if (keep.has(id)) continue
+      try { if (handle && handle.close) handle.close() } catch (_) { /* ignore */ }
+      liveHandles.delete(id)
+    }
+    for (const meta of recent) {
+      if (!meta || !meta.id || liveHandles.has(meta.id)) continue
+      try {
+        const handle = await ctx.host.sessions.connect(meta.id, (event) => onWallpaperEvent(meta.id, event))
+        liveHandles.set(meta.id, handle)
+      } catch (error) {
+        ctx.log.warn('wallpaper live connect failed: ' + String((error && error.message) || error))
+      }
+    }
+  }
+
+  async function backfillWallpaperTools() {
+    const recent = store.snapshot(null).recentSessions.slice(0, 3)
+    for (const meta of recent) {
+      if (!meta || !meta.id) continue
+      try {
+        const res = await ctx.host.sessions.messages(meta.id, { limit: 40 })
+        const messages = Array.isArray(res && res.messages) ? res.messages : []
+        const list = parseToolMessages(messages, 8, now()).map((item) => ({
+          profile: meta.profile || 'default',
+          agent: meta.agent || 'unknown',
+          sessionId: meta.id,
+          at: item.at,
+          name: item.name,
+          arg: item.arg,
+          state: item.state
+        }))
+        store.setToolHistory(meta.id, list)
+      } catch (_) { /* ignore */ }
+    }
+  }
+
+  async function wallpaperLiveTick() {
+    if (now() - wallpaperWatchAt > 90000) { stopWallpaperLive(); return }
+    try { await pollRate(wallpaperRun()) } catch (_) { /* ignore */ }
+    try { await pollSessions(wallpaperRun()) } catch (_) { /* ignore */ }
+    try { await ensureLiveConnections() } catch (_) { /* ignore */ }
+    if (now() - liveToolAt > 30000) {
+      liveToolAt = now()
+      try { await backfillWallpaperTools() } catch (_) { /* ignore */ }
+    }
+  }
+
+  function noteWallpaperWatch() {
+    wallpaperWatchAt = now()
+    if (liveTimer) return
+    liveTimer = setInterval(() => { wallpaperLiveTick().catch(() => {}) }, 3000)
+  }
+
+  function stopWallpaperLive() {
+    if (liveTimer) clearInterval(liveTimer)
+    liveTimer = 0
+    for (const [, handle] of liveHandles) {
+      try { if (handle && handle.close) handle.close() } catch (_) { /* ignore */ }
+    }
+    liveHandles.clear()
   }
 
   async function ensureWallpaper(settings) {
@@ -110,7 +212,10 @@ export function apply(ctx) {
         wallpaper = await startWallpaperServer({
           port,
           token,
-          getStats: () => buildStats(wallpaperRun())
+          getStats: () => {
+            noteWallpaperWatch()
+            return buildStats(wallpaperRun())
+          }
         })
         wallpaperPort = port
         wallpaperTokenCurrent = token
@@ -268,6 +373,7 @@ export function apply(ctx) {
 
   ctx.lifecycle.add(() => {
     clearInterval(metricTimer)
+    stopWallpaperLive()
     stopWallpaper()
   })
 

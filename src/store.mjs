@@ -22,6 +22,7 @@ export function createStore() {
   const skills = { current: null, top: [], fetchedAt: 0 }
   const sessionUsage = new Map()
   const contextLimits = new Map()
+  const signals = new Map()   // sessionId -> 最近一次实时事件时间
   const toolHistory = new Map()  // sessionId -> { at, list } 历史工具调用（服务端回填）
 
   function upsertSessions(list) {
@@ -114,12 +115,49 @@ export function createStore() {
       sessionId,
       name: tool.name || 'tool',
       arg: clip(tool.arg || '', 80),
-      state: tool.state || 'started'
+      state: tool.state || 'started',
+      callId: tool.callId || ''
     }
     toolCount += 1
     tools.push(entry)
     while (tools.length > MAX_TOOLS) tools.shift()
     return entry
+  }
+
+  function finishTool(sessionId, callId, name, state) {
+    for (let i = tools.length - 1; i >= 0; i--) {
+      const tool = tools[i]
+      if (tool.sessionId !== sessionId) continue
+      const sameCall = callId && tool.callId && tool.callId === callId
+      const sameName = !callId && tool.name === name && /running|started/.test(tool.state)
+      if (sameCall || sameName) {
+        tool.state = state
+        return tool
+      }
+    }
+    return null
+  }
+
+  function noteSignal(sessionId, at = Date.now()) {
+    if (sessionId) signals.set(sessionId, at)
+  }
+
+  function motion(now = Date.now()) {
+    let lastEventAt = 0
+    for (const at of signals.values()) if (at > lastEventAt) lastEventAt = at
+    for (const tool of tools) if (tool.at > lastEventAt) lastEventAt = tool.at
+    for (const stream of streams.values()) if (stream.ts > lastEventAt) lastEventAt = stream.ts
+    for (const plan of plans.values()) if (plan.ts > lastEventAt) lastEventAt = plan.ts
+    let working = 0
+    let pendingSec = null
+    for (const stream of streams.values()) {
+      if (!stream.working) continue
+      working += 1
+      const started = stream.workStartedAt || stream.ts || now
+      const sec = Math.max(0, Math.round((now - started) / 1000))
+      pendingSec = pendingSec === null ? sec : Math.max(pendingSec, sec)
+    }
+    return { lastEventAt, pendingSec, jobsRunning: working }
   }
 
   function setPlan(sessionId, plan) {
@@ -388,6 +426,7 @@ export function createStore() {
       streams: streamList.slice(0, 10),
       taskPlan: { plans: planList.slice(0, 10) },
       toolCount,
+      motion: motion(now),
       tools: tools.filter((x) => ok(x.profile)).slice(-20).reverse(),
       backfillTools: backfillTools.slice(0, 12),
       events: events.filter((x) => ok(x.profile)).slice(-30).reverse(),
@@ -399,6 +438,7 @@ export function createStore() {
     sessions, streams, plans, tools, events, usage, skills, rate,
     upsertSessions, streamFor, appendDelta, setWorking, noteTool, setPlan,
     addEvent, setUsage, setRate, setSkills, setSessionUsage, setContextLimit, setToolHistory,
+    finishTool, noteSignal, motion,
     backfillStream, snapshot
   }
 }

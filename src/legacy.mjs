@@ -28,6 +28,8 @@ export function buildLegacyStats(snap, host, version) {
     recentTools.length
   )
   const events = Array.isArray(snap.events) ? snap.events : []
+  const motion = snap.motion || { lastEventAt: 0, pendingSec: null, jobsRunning: 0 }
+  const lastEventAt = Math.max(motion.lastEventAt || 0, events[0] ? events[0].at : 0)
   const topAgent = agents[0] || {}
   const topStream = streams[0] || {}
   const current = snap.current || {}
@@ -136,7 +138,7 @@ export function buildLegacyStats(snap, host, version) {
         return item
       }),
       pendingAgents: [],
-      pendingSec: null,
+      pendingSec: motion.pendingSec,
       planActive: running.length > 0,
       planAgeSec: running[0] ? running[0].ageSec : null,
       taskPlan: primary ? {
@@ -151,10 +153,10 @@ export function buildLegacyStats(snap, host, version) {
         plans
       } : { plans },
       lastEvent: events[0] ? events[0].type : null,
-      lastEventAgeSec: events[0] ? sec(events[0].at, now) : null,
+      lastEventAgeSec: lastEventAt ? sec(lastEventAt, now) : null,
       turns: null,
       steps: null,
-      jobsRunning: null
+      jobsRunning: motion.jobsRunning
     }
   }
 }

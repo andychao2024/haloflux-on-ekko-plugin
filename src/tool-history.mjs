@@ -10,7 +10,7 @@ const ARG_KEYS = ['command', 'file_path', 'path', 'pattern', 'query', 'url',
   'prompt', 'description', 'session_id', 'sessionId', 'skill', 'tool', 'action', 'glob']
 
 /** 与 docker 版一致：从工具参数对象里挑一个最有代表性的一行摘要。 */
-function toolArg(input) {
+export function toolArg(input) {
   if (!input || typeof input !== 'object') return ''
   let v = null
   for (const key of ARG_KEYS) {
