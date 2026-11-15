@@ -156,3 +156,24 @@ test('不产生 undefined 字段（SDK 会拒绝整份 JSON）', () => {
   walk(d, 'root')
   assert.deepEqual(bad, [])
 })
+
+test('壁纸页忽略卡在 working 的实时 slot，只认历史轮询', () => {
+  const store = createStore()
+  const nowSec = Math.floor(Date.now() / 1000)
+  store.upsertSessions([
+    { id: 's1', profile: 'default', agent: 'claude', last_active: nowSec - 120, message_count: 5 }
+  ])
+  store.setWorking('s1', true)
+  const d = buildLegacyStats(store.snapshot(null), {}, '0.8.30')
+  assert.equal(d.ai.jobsRunning, 1)
+
+  applyMotionSignals(d.ai, {
+    now: Date.now(),
+    liveSlots: [],
+    pendingSessions: [],
+    sessions: [{ id: 's1', lastActive: nowSec - 120 }]
+  })
+  assert.equal(d.ai.jobsRunning, 0)
+  assert.equal(d.ai.pendingSec, null)
+  assert.equal(motionOf(d.ai).busy, false)
+})

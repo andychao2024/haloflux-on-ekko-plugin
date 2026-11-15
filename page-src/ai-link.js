@@ -211,6 +211,93 @@
     return shortTitle(name, 8);
   }
 
+  /** 每次新工具调用换一条随机公式，多会话的工具调用排队逐条显示。 */
+  function resetCheckCallout(c) {
+    if (!c) return;
+    clearTimeout(c.showTimer);
+    clearTimeout(c.hideTimer);
+    clearTimeout(c.offTimer);
+    c.queue.length = 0;
+    c.busy = false;
+    c.eventAt = 0;
+    c.box.classList.remove('show');
+    if (window.__hlSetCheckVisible) window.__hlSetCheckVisible(false);
+  }
+
+  function queueNewTools(c, tools) {
+    for (var i = 0; i < tools.length; i++) {
+      var t = tools[i];
+      if (!t) continue;
+      var key = t.callId ? 'id:' + t.callId
+        : [t.name || '', t.arg || '', t.agent || '', t.at || ''].join('|');
+      if (Object.prototype.hasOwnProperty.call(c.seen, key)) continue;
+      c.seen[key] = 1;
+      var age = isNum(t.ageSec)
+        ? Math.max(0, Math.round(t.ageSec))
+        : (t.at ? Math.max(0, Math.round((Date.now() - Number(t.at)) / 1000)) : null);
+      if (t.state === 'running' || (age !== null && age <= 15)) c.queue.push(t);
+    }
+    var keys = Object.keys(c.seen);
+    if (keys.length > 160) for (var k = 0; k < 40; k++) delete c.seen[keys[k]];
+  }
+
+  function showNextCheck(c) {
+    var tool = c.queue.shift();
+    if (!tool) {
+      c.busy = false;
+      if (window.__hlSetCheckVisible) window.__hlSetCheckVisible(false);
+      return;
+    }
+    c.busy = true;
+    var idx = Math.floor(Math.random() * CHECKS.length);
+    if (idx === c.index) idx = (idx + 1) % CHECKS.length;
+    c.index = idx;
+    clearTimeout(c.showTimer);
+    clearTimeout(c.hideTimer);
+    clearTimeout(c.offTimer);
+    c.box.classList.remove('show');
+    if (window.__hlSetCheckVisible) window.__hlSetCheckVisible(true);
+    c.showTimer = setTimeout(function () {
+      c.k.textContent = CHECKS[idx][0];
+      c.v.textContent = CHECKS[idx][1];
+      c.box.classList.add('show');
+      c.hideTimer = setTimeout(function () {
+        c.box.classList.remove('show');
+        c.offTimer = setTimeout(function () {
+          if (c.queue.length) showNextCheck(c);
+          else { c.busy = false; if (window.__hlSetCheckVisible) window.__hlSetCheckVisible(false); }
+        }, 400);
+      }, 3200);
+      try {
+        vd.pulse = Math.min(1.2, vd.pulse + 0.35);
+        vd.forceFrames = 3;
+        scheduleVisual();
+      } catch (e) { /* ignore */ }
+    }, 400);
+  }
+
+  /** AI 事件流出现新条目时也排一次公式；令牌类事件较多，5 秒内只取一条。 */
+  function noteEventCheck(text) {
+    var c = CON.chk;
+    if (!c || window.__hlAnim === false) return;
+    if (String(text || '').indexOf('工具调用') === 0) return;
+    var ms = Date.now();
+    if (c.eventAt && ms - c.eventAt < 5000) return;
+    c.eventAt = ms;
+    c.queue.push({ event: text });
+  }
+
+  function updateCheckCallout(d) {
+    var c = CON.chk;
+    if (!c || !c.box || !c.k || !c.v) return;
+    if (window.__hlAnim === false) { resetCheckCallout(c); return; }
+    var ai = (d && d.ai) || {};
+    var tools = Array.isArray(ai.recentTools) ? ai.recentTools : [];
+    if (tools.length) queueNewTools(c, tools);
+    if (c.busy || !c.queue.length) return;
+    showNextCheck(c);
+  }
+
   /** 标题行空间不够时使用的短标签，保证 4 个 Agent 状态片还能排在同一行。 */
   function compactAgent(name) {
     var n = String(name || '').toLowerCase();
@@ -758,6 +845,7 @@
     // 先置在线，面板里的“状态”行才能在同一帧显示“已连接”
     setOnline(true);
     try { updateConsole(d); } catch (e) { /* 面板出错不影响 HUD */ }
+    try { updateCheckCallout(d); } catch (e) { /* 标注框出错不影响整体 */ }
     if (!hud) return;
     var ai = (d && d.ai) || {};
 
@@ -1558,13 +1646,14 @@
     zoomed: false,
     zoomTimer: 0,
     camZoomBase: 1,
-    last: null
+    last: null,
+    chk: null
   };
 
   /* 插件设置里可以关掉显卡；宿主通过 __hlShowGpu 下发，未设置时默认显示。 */
   function gpuVisible() { return window.__hlShowGpu !== false; }
 
-  var PANEL_TITLES = ['AI 事件流', '令牌吞吐', '思考过程', 'CPU / GPU 负载',
+  var PANEL_TITLES = ['AI 事件流', '令牌吞吐', '思考过程', 'CPU / 磁盘 IO',
     '任务计划', '工具调用', '代理调度', '系统负载索引'];
 
   var CONSOLE_CSS = [
@@ -1989,13 +2078,28 @@
     // 直接在 HTML 里隐藏（见 index.html 的 .ov.status），这里不再接管它的文字。
     CON.stBig = null;
 
-    // 原来钉在光环上的标注改成"跟随鼠标的详细解析"（bindHover），这里把固定的那个收起来
+    // 光环标注框接最新工具调用；drawCallout 保留，用来画引线和跟随相机。
     try {
       var chkBox = document.getElementById('chk');
-      if (chkBox) chkBox.style.display = 'none';
-      if (typeof drawCallout === 'function') drawCallout = function () { };
-      CON.checks = null;
+      if (chkBox) {
+        CON.chk = {
+          box: chkBox,
+          k: document.getElementById('chkK'),
+          v: document.getElementById('chkV'),
+          index: -1,
+          seen: {},
+          queue: [],
+          busy: false,
+          eventAt: 0,
+          showTimer: 0,
+          hideTimer: 0,
+          offTimer: 0
+        };
+        chkBox.style.display = '';
+        chkBox.style.opacity = '';
+      }
     } catch (e) { /* ignore */ }
+    CON.checks = null;
 
     // 顶部 5 个 KPI 的 seg 条也接上数据（宽度 = 占比）
     CON.segs = document.querySelectorAll('.kpi .seg i');
@@ -2028,6 +2132,7 @@
     function p(x) { return (x < 10 ? '0' : '') + x; }
     CON.events.push({ t: p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()), text: text });
     while (CON.events.length > 10) CON.events.shift();
+    try { noteEventCheck(text); } catch (e) { /* ignore */ }
   }
 
   /* ---- 主更新：每个 /stats 采样调用一次 ---- */
@@ -2565,7 +2670,7 @@
     }
     p.el.classList.toggle('ag-dense', shown.length > 6);
     if (p.titleEl) {
-      var t = '代理调度' + (list.length ? ' · ' + list.length : '');
+      var t = '代理调度';
       if (p.titleEl.textContent !== t) p.titleEl.textContent = t;
     }
     if (p.headEl) {
@@ -3594,7 +3699,7 @@
           + (d.gpu && d.gpu.source === 'drm-sysfs' ? ' · <b>drm sysfs</b>' : ''));
       }
       return {
-        label: 'CPU / GPU 负载',
+        label: 'CPU / 磁盘 IO',
         value: fmtPct(d.cpu) +
           (d.disk && isNum(d.disk.utilization) ? ' / ' + fmtPct(d.disk.utilization) : '') +
           (showGpuH ? ' / ' + (d.gpu ? (isNum(d.gpu.utilization) ? fmtPct(d.gpu.utilization) : '—') : '未检测到') : ''),

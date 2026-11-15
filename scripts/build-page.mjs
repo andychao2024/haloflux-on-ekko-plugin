@@ -24,18 +24,8 @@ const build = (ai.match(/var BUILD = '([^']+)'/) || [])[1] || 'v0.0'
 const bgmPath = join(root, 'assets/bgm.mp3')
 const bgm = existsSync(bgmPath) ? 'data:audio/mpeg;base64,' + readFileSync(bgmPath).toString('base64') : ''
 
-/* 只做一处口径改动：面板标题里的 GPU 换成「磁盘 IO」。
-   GPU 曲线本身保留，由插件设置里的「显示显卡」开关在运行时控制
-   （ai-link.js 读 window.__hlShowGpu）。动效/布局保持原版。 */
-function mustReplace(text, from, to, label) {
-  if (!text.includes(from)) throw new Error('页面结构已变，未找到：' + label)
-  return text.split(from).join(to)
-}
+/* 页面标题和代理调度的会话数已在 page-src 中统一，构建时不再二次改写。 */
 let aiPatched = ai
-aiPatched = mustReplace(aiPatched, "'CPU / GPU 负载'", "'CPU / 磁盘 IO'", 'CPU/GPU 面板标题')
-aiPatched = mustReplace(aiPatched,
-  "var t = '代理调度' + (list.length ? ' · ' + list.length : '');",
-  "var t = '代理调度';", '代理调度标题计数')
 
 const escapeScript = (code) => code.replace(/<\/script/gi, '<\\/script')
 
@@ -82,8 +72,11 @@ const shim = `
        清回来，index.html 的 frame() 会永远跳过 drawStage()，画面彻底冻结。
        后台标签页的 requestAnimationFrame 本来就会被浏览器自动节流，无需手停。 */
     if (window.__stagePause) window.__stagePause(settings.anim === false);
+    window.__hlAnim = settings.anim !== false;
     var canvas = document.getElementById('stage');
     if (canvas) canvas.style.visibility = settings.anim === false ? 'hidden' : 'visible';
+    var chk = document.getElementById('chk');
+    if (chk) chk.style.display = settings.anim === false ? 'none' : '';
     if (settings.compat) {
       try {
         if (!window.__hlCompat) {

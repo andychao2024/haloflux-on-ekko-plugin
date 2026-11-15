@@ -21,7 +21,9 @@ function pageWithTitle(html, title) {
   const safe = clean.replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[c]))
-  return html.replace(/<h1>[^<]*<\/h1>/, '<h1>' + safe + '</h1>')
+  return html
+    .replace(/<h1>[^<]*<\/h1>/, '<h1>' + safe + '</h1>')
+    .replace(/<title>[^<]*<\/title>/, '<title>' + safe + '</title>')
 }
 
 export async function mount(root, ctx) {
@@ -462,6 +464,8 @@ function mountSettings(root, ctx) {
     .hls button { font:inherit; padding:5px 12px; border-radius:6px; border:1px solid rgba(255,255,255,.2);
       background:rgba(255,255,255,.06); color:inherit; cursor:pointer; }
     .hls .muted { color:var(--text-secondary,#9aa0aa); }
+    .hls .save-msg { opacity:0; transform:translateY(3px); transition:opacity .2s ease, transform .2s ease; }
+    .hls .save-msg.show { opacity:1; transform:none; }
     .hls table { border-collapse:collapse; } .hls td { padding:2px 10px 2px 0; vertical-align:top; }
   `
   root.append(style)
@@ -483,6 +487,7 @@ function mountSettings(root, ctx) {
       <button type="button" id="hls-wallpaper-random">随机</button>
     </label>
     <div class="muted">壁纸地址：<span id="hls-wallpaper-url">http://127.0.0.1:8790/</span></div>
+    <div class="muted">壁纸访问者：<span id="hls-wallpaper-viewers">0</span></div>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式，默认开启）</label>
     <label><input type="checkbox" id="hls-gpu"> 显示显卡（GPU 曲线与显存，默认开启；未检测到显卡时不显示）</label>
     <label>工具调用显示条数
@@ -494,7 +499,7 @@ function mountSettings(root, ctx) {
       <span class="muted">默认 8，可设 3–12（超出的 Agent 在末行轮换）</span>
     </label>
     <label><input type="checkbox" id="hls-compat"> 兼容模式（DPR=1，关闭 will-change 与 CSS 动画）</label>
-    <div><button id="hls-save">保存</button> <span class="muted" id="hls-msg"></span></div>
+    <div><button id="hls-save">保存</button> <span class="muted save-msg" id="hls-msg"></span></div>
     <div class="muted">页面与动效来自 HALOFLUX 原作；数据来自 Studio 会话/用量接口与本机指标。插件只读，不读取数据库文件，不发外部网络请求。</div>
     <table>
       <tr><td>插件</td><td>HALOFLUX ON Ekko ${ctx.plugin && ctx.plugin.version ? ctx.plugin.version : ''}</td></tr>
@@ -510,6 +515,7 @@ function mountSettings(root, ctx) {
   const wallpaperPortBox = wrap.querySelector('#hls-wallpaper-port')
   const wallpaperTokenBox = wrap.querySelector('#hls-wallpaper-token')
   const wallpaperUrl = wrap.querySelector('#hls-wallpaper-url')
+  const wallpaperViewers = wrap.querySelector('#hls-wallpaper-viewers')
   const accessHost = () => {
     try {
       if (location.ancestorOrigins && location.ancestorOrigins.length) {
@@ -539,6 +545,26 @@ function mountSettings(root, ctx) {
   const agentRowsBox = wrap.querySelector('#hls-agent-rows')
   const titleInput = wrap.querySelector('#hls-title')
   const msg = wrap.querySelector('#hls-msg')
+  let msgTimer = 0
+  const setMsg = (text) => {
+    clearTimeout(msgTimer)
+    msg.textContent = text
+    msg.classList.remove('show')
+    void msg.offsetWidth
+    msg.classList.add('show')
+    msgTimer = setTimeout(() => msg.classList.remove('show'), 5000)
+  }
+  const refreshViewers = () => {
+    ctx.rpc.call('wallpaper-status').then((s) => {
+      wallpaperViewers.textContent = s && s.running ? String(s.viewers || 0) : '未启用'
+    }).catch(() => { wallpaperViewers.textContent = '-' })
+  }
+  refreshViewers()
+  const viewersTimer = setInterval(refreshViewers, 2000)
+  ctx.lifecycle.add(() => {
+    clearInterval(viewersTimer)
+    clearTimeout(msgTimer)
+  })
   ctx.rpc.call('get-settings').then((s) => {
     showIconBox.checked = !(s && s.showIcon === false)
     wallpaperBox.checked = !!(s && s.wallpaper)
@@ -573,11 +599,12 @@ function mountSettings(root, ctx) {
         wallpaperTokenBox.value = saved.wallpaperToken
         updateWallpaperUrl()
       }
-      if (saved && saved.wallpaperError) msg.textContent = '壁纸服务：' + saved.wallpaperError
-      else if (saved && saved.navSynced === false) msg.textContent = '设置已保存，但 Studio 拒绝修改侧栏入口；可到 Studio 导航设置里手动调整'
-      else msg.textContent = '已保存，重新打开看板生效'
+      if (saved && saved.wallpaperError) setMsg('壁纸服务：' + saved.wallpaperError)
+      else if (saved && saved.navSynced === false) setMsg('设置已保存，但 Studio 拒绝修改侧栏入口；可到 Studio 导航设置里手动调整')
+      else setMsg('已保存，重新打开看板生效')
+      refreshViewers()
     } catch (error) {
-      msg.textContent = '保存失败：' + (error.message || error)
+      setMsg('保存失败：' + (error.message || error))
     }
   }
 }

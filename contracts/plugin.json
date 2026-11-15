@@ -165,6 +165,26 @@
         "cacheHit"
       ],
       "additionalProperties": false
+    },
+    "wallpaperStatus": {
+      "type": "object",
+      "description": "壁纸服务的当前状态。",
+      "properties": {
+        "viewers": {
+          "type": "integer",
+          "description": "最近 15 秒内请求过壁纸数据的访问者数量。",
+          "minimum": 0
+        },
+        "running": {
+          "type": "boolean",
+          "description": "壁纸服务是否正在监听。"
+        }
+      },
+      "required": [
+        "viewers",
+        "running"
+      ],
+      "additionalProperties": false
     }
   },
   "rpc": {
@@ -197,6 +217,11 @@
       "description": "刷新并读取当前令牌吞吐；由页面独立轮询，避免阻塞 stats。",
       "input": "empty",
       "output": "rate"
+    },
+    "wallpaper-status": {
+      "description": "读取壁纸服务的访问者数量。",
+      "input": "empty",
+      "output": "wallpaperStatus"
     }
   },
   "tools": {},

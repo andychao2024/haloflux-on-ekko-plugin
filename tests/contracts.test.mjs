@@ -18,3 +18,11 @@ test('settings model requires the ten declared fields', () => {
   assert.throws(() => validateModel(contract, 'settings', { ...value, toolRows: 2 }), /outside range/)
   assert.throws(() => validateModel(contract, 'settings', { ...value, agentRows: 13 }), /outside range/)
 })
+
+test('wallpaper status model reports viewers and running state', () => {
+  const value = { viewers: 1, running: true }
+  assert.deepEqual(validateModel(contract, 'wallpaperStatus', value), value)
+  assert.throws(() => validateModel(contract, 'wallpaperStatus', { viewers: -1, running: true }), /outside range/)
+  assert.throws(() => validateModel(contract, 'wallpaperStatus', { viewers: 0 }), /missing/)
+  assert.equal(contract.rpc['wallpaper-status'].output, 'wallpaperStatus')
+})

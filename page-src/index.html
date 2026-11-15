@@ -48,7 +48,8 @@ header{display:grid;grid-template-columns:minmax(240px,1.7fr) repeat(5,minmax(0,
   background:repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px),
              radial-gradient(ellipse at 40% 50%,transparent 55%,rgba(0,0,0,.55) 100%)}
 .ov{position:absolute;font-size:9px;letter-spacing:1px;color:var(--text);pointer-events:none;z-index:2}
-.chk{left:0;top:0;will-change:transform;background:rgba(8,9,11,.85);border:1px solid var(--line2);padding:5px 8px;transition:opacity .4s}
+.chk{left:0;top:0;will-change:transform;background:rgba(8,9,11,.85);border:1px solid var(--line2);padding:5px 8px;opacity:0;visibility:hidden;transition:opacity .4s}
+.chk.show{opacity:1;visibility:visible}
 .chk b{display:block;font-size:8px;color:var(--dim);font-weight:600;margin-bottom:3px}
 .chk span{font-size:12px;color:var(--white);font-weight:600;white-space:nowrap}
 .console{top:10px;right:14px;border:1px solid var(--line2);padding:3px 8px;background:rgba(8,9,11,.8)}
@@ -170,7 +171,7 @@ html.aix-ready .panels .p>:not(h3):not(.aix-pane){display:none!important}
   <div class="stage" id="stageWrap">
     <canvas id="stage"></canvas>
     <audio id="bgmAudio" data-src="audio/sw421k.mp3" loop preload="auto" playsinline></audio>
-    <div class="ov chk" id="chk"><b id="chkK">STABILITY CHECK</b><span id="chkV">CFL = |u| Δt / Δx</span></div>
+    <div class="ov chk" id="chk"><b id="chkK">MASS CONSERVATION</b><span id="chkV">Σ ρ dV = const</span></div>
     <div class="ov status" style="display:none"><div class="big" id="stBig">7 / 11 METHODS · 4 PENDING</div><div class="sm">independent runs · shared event bus</div></div>
   </div>
 
@@ -1245,9 +1246,11 @@ function drawStage(dt) {
 /* ---------- callout box with leader line (follows the camera) ---------- */
 const CHECKS = [['STABILITY CHECK', 'CFL = |u| Δt / Δx'], ['MASS CONSERVATION', 'Σ ρ dV = const'], ['RESIDUAL NORM', 'r = ‖b − A·u‖₂'],
   ['BOUNDARY', 'u · n = 0  on ∂Ω'], ['PROJECTION', '∇²p = ∇ · u* / Δt']];
-let chkI = 0;
 const chkEl = document.getElementById('chk');
+let chkOn = false;
+window.__hlSetCheckVisible = function (on) { chkOn = !!on; };
 function drawCallout() {
+  if (!chkOn) return;
   const a = -thS * 0.32;
   const anchor = toScreen(cx + Math.cos(a) * (RO + 30), cy + Math.sin(a) * (RO + 30));
   const box = toScreen(cx + Math.cos(a) * (RO + 30) + 120, cy + Math.sin(a) * (RO + 30) - 40);
@@ -1257,16 +1260,6 @@ function drawCallout() {
   S.beginPath(); S.moveTo(anchor.x, anchor.y); S.lineTo(bx, by + 12); S.stroke();
   S.fillStyle = '#fff'; S.fillRect(anchor.x - 1.5, anchor.y - 1.5, 3, 3);
 }
-setInterval(() => {
-  chkEl.style.opacity = 0;
-  setTimeout(() => {
-    chkI = (chkI + 1) % CHECKS.length;
-    document.getElementById('chkK').textContent = CHECKS[chkI][0];
-    document.getElementById('chkV').textContent = CHECKS[chkI][1];
-    chkEl.style.opacity = 1;
-  }, 400);
-}, 3600);
-
 /* =========================================================
    HEADER KPIs
    ========================================================= */

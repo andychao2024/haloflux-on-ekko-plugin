@@ -23,14 +23,48 @@ const MIME = {
 const COOKIE = 'halofluxk'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-function loadFiles() {
+const clampRows = (value, lo, hi) => {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : 8
+}
+const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (c) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[c]))
+
+function pageHtml(html, display) {
+  const d = display || {}
+  let out = html
+  const title = typeof d.title === 'string' ? d.title.trim() : ''
+  const safe = escapeHtml(title || 'HALOFLUX ON Ekko').slice(0, 80)
+  if (title) out = out.replace(/<h1>[^<]*<\/h1>/, '<h1>' + safe + '</h1>')
+  out = out.replace(/<title>[^<]*<\/title>/, '<title>' + safe + '</title>')
+  const boot = '<script>(function(){' +
+    'window.__hlShowGpu=' + (d.gpu !== false ? 'true' : 'false') + ';' +
+    'window.__hlToolRows=' + clampRows(d.toolRows, 3, 15) + ';' +
+    'window.__hlAgentRows=' + clampRows(d.agentRows, 3, 12) + ';' +
+    'window.__wpPaused=' + (d.anim === false ? 'true' : 'false') + ';' +
+    'window.__hlAnim=' + (d.anim !== false ? 'true' : 'false') + ';' +
+    (d.compat ? "try{Object.defineProperty(window,'devicePixelRatio',{get:function(){return 1},configurable:true})}catch(e){}" : '') +
+    '})();</script>'
+  out = out.replace(/<body([^>]*)>/, '<body$1>' + boot)
+  if (d.anim === false) {
+    out = out.replace('</head>', '<style>#stage{visibility:hidden}</style></head>')
+  }
+  if (d.compat) {
+    out = out.replace('</head>', '<style>*,*::before,*::after{will-change:auto !important;animation:none !important;transition:none !important}canvas{image-rendering:auto}</style></head>')
+  }
+  return out
+}
+
+function loadFiles(display) {
   const ai = readFileSync(join(root, 'page-src/ai-link.js'), 'utf8')
   const build = (ai.match(/var BUILD = '([^']+)'/) || [])[1] || 'v0.0'
+  const page = Buffer.from(pageHtml(readFileSync(join(root, 'page-src/index.html'), 'utf8'), display))
   return {
     build,
     files: {
-      '/': { body: readFileSync(join(root, 'page-src/index.html')), type: MIME['.html'] },
-      '/index.html': { body: readFileSync(join(root, 'page-src/index.html')), type: MIME['.html'] },
+      '/': { body: page, type: MIME['.html'] },
+      '/index.html': { body: page, type: MIME['.html'] },
       '/wp.js': { body: readFileSync(join(root, 'page-src/wp.js')), type: MIME['.js'] },
       '/ai-link.js': { body: Buffer.from(ai), type: MIME['.js'] },
       '/audio/sw421k.mp3': { body: readFileSync(join(root, 'assets/bgm.mp3')), type: MIME['.mp3'] }
@@ -96,8 +130,16 @@ button{font:inherit;padding:6px 12px;background:#98e0cf;color:#08110d;border:0;c
  * @param {() => Promise<object>} options.getStats 返回 docker /stats 结构
  * @returns {Promise<{port:number,url:string,close:()=>Promise<void>}>}
  */
-export function startWallpaperServer({ port, host = '0.0.0.0', token = '', getStats }) {
-  const { build, files } = loadFiles()
+export function startWallpaperServer({ port, host = '0.0.0.0', token = '', display = {}, getStats, viewerTtlMs = 15000 }) {
+  const { build, files } = loadFiles(display)
+  const viewers = new Map()
+  const pruneViewers = (now) => {
+    for (const [key, at] of viewers) if (now - at > viewerTtlMs) viewers.delete(key)
+  }
+  const viewerKey = (req) => {
+    const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim()
+    return ip + '|' + String(req.headers['user-agent'] || '')
+  }
   const server = createServer(async (req, res) => {
     let url
     try { url = new URL(req.url || '/', 'http://127.0.0.1') } catch (_) { url = new URL('/', 'http://127.0.0.1') }
@@ -137,6 +179,9 @@ export function startWallpaperServer({ port, host = '0.0.0.0', token = '', getSt
     const headers = setCookie.length ? { 'Set-Cookie': setCookie } : {}
 
     if (path === '/stats') {
+      const nowMs = Date.now()
+      viewers.set(viewerKey(req), nowMs)
+      pruneViewers(nowMs)
       try {
         const data = await getStats()
         if (!data || !data.ai) throw new Error('stats unavailable')
@@ -173,6 +218,10 @@ export function startWallpaperServer({ port, host = '0.0.0.0', token = '', getSt
       resolve({
         port: actual,
         url: `http://${host}:${actual}/`,
+        status: () => {
+          pruneViewers(Date.now())
+          return { viewers: viewers.size, running: true }
+        },
         close: () => new Promise((done) => {
           server.close(() => done())
           setTimeout(done, 500)

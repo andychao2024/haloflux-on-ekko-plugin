@@ -230,7 +230,8 @@ export function createStore() {
   function backfillStream(sessionId, text, ts) {
     if (!text) return
     const st = streamFor(sessionId)
-    if (st.reasoning) return
+    // 实时增量优先；只有历史回填的数据允许被更新，避免思考流永远停在第一次。
+    if (st.reasoning && !st.backfilled) return
     st.reasoning = clip(text)
     st.ts = ts || st.ts
     st.backfilled = true

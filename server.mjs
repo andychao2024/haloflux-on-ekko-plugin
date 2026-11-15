@@ -6,11 +6,13 @@ import { createStore } from './src/store.mjs'
 import { createMetrics } from './src/metrics.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 import { startWallpaperServer } from './src/wallpaper-server.mjs'
-import { parseLiveEvent } from './src/live-signals.mjs'
 import { parseToolMessages } from './src/tool-history.mjs'
+import { messagesWorking } from './src/session-state.mjs'
+import { applyMotionSignals } from './src/motion-signals.mjs'
+import { applyWallpaperActivity } from './src/wallpaper-activity.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.29'
+const VERSION = '0.9.0'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -63,6 +65,8 @@ export function apply(ctx) {
   let wallpaperTokenCurrent = ''
   let wallpaperBusy = null
   let wallpaperError = ''
+  let wallpaperDisplayKey = ''
+  const wallpaperPending = new Map()   // sessionId -> { working, at }
 
   const makeToken = () => randomBytes(16).toString('hex')
   // 首次安装随机生成访问密钥并持久化到插件共享状态
@@ -79,9 +83,9 @@ export function apply(ctx) {
   function wallpaperRun() {
     // 壁纸服务没有 Studio 页面身份，使用插件激活身份（管理员），只读。
     return {
-      identity: { userId: ctx.identity.userId, profile: ctx.identity.profile },
+      identity: ctx.identity,
       host: ctx.host,
-      signal: new AbortController().signal
+      signal: ctx.signal
     }
   }
 
@@ -91,61 +95,11 @@ export function apply(ctx) {
     wallpaper = null
     wallpaperPort = 0
     wallpaperTokenCurrent = ''
-    stopWallpaperLive()
+    wallpaperDisplayKey = ''
     try { await current.close() } catch (_) { /* ignore */ }
   }
 
-  const liveHandles = new Map()
-  let liveTimer = 0
-  let wallpaperWatchAt = 0
   let liveToolAt = 0
-
-  function onWallpaperEvent(sessionId, event) {
-    const action = parseLiveEvent(event)
-    if (!action) return
-    const at = now()
-    store.noteSignal(sessionId, at)
-    if (action.kind === 'delta') {
-      store.appendDelta(sessionId, action.channel, action.text)
-      store.setWorking(sessionId, true)
-    } else if (action.kind === 'tool') {
-      store.setWorking(sessionId, true, { lastToolAt: at })
-      if (action.state === 'running') {
-        store.noteTool(sessionId, {
-          name: action.name, arg: action.arg, state: 'running', callId: action.callId
-        })
-      } else {
-        store.finishTool(sessionId, action.callId, action.name, action.state)
-      }
-    } else if (action.kind === 'run') {
-      store.setWorking(sessionId, action.working)
-    } else if (action.kind === 'plan') {
-      store.setPlan(sessionId, action.plan)
-    } else if (action.kind === 'resume') {
-      store.setWorking(sessionId, action.working)
-      if (action.plans[0]) store.setPlan(sessionId, action.plans[0])
-    }
-  }
-
-  async function ensureLiveConnections() {
-    if (!ctx.host || !ctx.host.sessions || typeof ctx.host.sessions.connect !== 'function') return
-    const recent = store.snapshot(null).recentSessions.slice(0, 4)
-    const keep = new Set(recent.map((meta) => meta.id))
-    for (const [id, handle] of [...liveHandles]) {
-      if (keep.has(id)) continue
-      try { if (handle && handle.close) handle.close() } catch (_) { /* ignore */ }
-      liveHandles.delete(id)
-    }
-    for (const meta of recent) {
-      if (!meta || !meta.id || liveHandles.has(meta.id)) continue
-      try {
-        const handle = await ctx.host.sessions.connect(meta.id, (event) => onWallpaperEvent(meta.id, event))
-        liveHandles.set(meta.id, handle)
-      } catch (error) {
-        ctx.log.warn('wallpaper live connect failed: ' + String((error && error.message) || error))
-      }
-    }
-  }
 
   async function backfillWallpaperTools() {
     const recent = store.snapshot(null).recentSessions.slice(0, 3)
@@ -154,7 +108,11 @@ export function apply(ctx) {
       try {
         const res = await ctx.host.sessions.messages(meta.id, { limit: 40 })
         const messages = Array.isArray(res && res.messages) ? res.messages : []
-        const list = parseToolMessages(messages, 8, now()).map((item) => ({
+        const plans = Array.isArray(res && res.taskPlans) ? res.taskPlans : []
+        if (plans[0]) store.setPlan(meta.id, plans[0])
+        const at = now()
+        wallpaperPending.set(meta.id, { working: messagesWorking(messages), at, agent: meta.agent || 'unknown' })
+        const list = parseToolMessages(messages, 8, at).map((item) => ({
           profile: meta.profile || 'default',
           agent: meta.agent || 'unknown',
           sessionId: meta.id,
@@ -163,35 +121,34 @@ export function apply(ctx) {
           arg: item.arg,
           state: item.state
         }))
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const message = messages[i]
+          if (!message || message.role !== 'assistant') continue
+          const text = message.reasoning_content || message.reasoning || message.content
+          if (text && String(text).trim()) {
+            const rawTs = Number(message.timestamp)
+            const ts = rawTs > 1e12 ? rawTs : rawTs > 0 ? rawTs * 1000 : at
+            store.backfillStream(meta.id, String(text).trim(), ts)
+          }
+          break
+        }
         store.setToolHistory(meta.id, list)
       } catch (_) { /* ignore */ }
     }
+    const cutoff = now() - 300000
+    for (const [id, rec] of wallpaperPending) if (!rec || rec.at < cutoff) wallpaperPending.delete(id)
   }
 
-  async function wallpaperLiveTick() {
-    if (now() - wallpaperWatchAt > 90000) { stopWallpaperLive(); return }
-    try { await pollRate(wallpaperRun()) } catch (_) { /* ignore */ }
-    try { await pollSessions(wallpaperRun()) } catch (_) { /* ignore */ }
-    try { await ensureLiveConnections() } catch (_) { /* ignore */ }
-    if (now() - liveToolAt > 30000) {
-      liveToolAt = now()
-      try { await backfillWallpaperTools() } catch (_) { /* ignore */ }
+  // 壁纸页直接复用插件设置里的显示项；保存后重启服务即可让已打开的页面刷新。
+  function wallpaperDisplay(settings) {
+    return {
+      anim: settings.anim !== false,
+      compat: !!settings.compat,
+      gpu: settings.gpu !== false,
+      toolRows: clampInt(settings.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
+      agentRows: clampInt(settings.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
+      title: typeof settings.title === 'string' ? settings.title : ''
     }
-  }
-
-  function noteWallpaperWatch() {
-    wallpaperWatchAt = now()
-    if (liveTimer) return
-    liveTimer = setInterval(() => { wallpaperLiveTick().catch(() => {}) }, 3000)
-  }
-
-  function stopWallpaperLive() {
-    if (liveTimer) clearInterval(liveTimer)
-    liveTimer = 0
-    for (const [, handle] of liveHandles) {
-      try { if (handle && handle.close) handle.close() } catch (_) { /* ignore */ }
-    }
-    liveHandles.clear()
   }
 
   async function ensureWallpaper(settings) {
@@ -199,12 +156,14 @@ export function apply(ctx) {
     const want = !!settings.wallpaper
     const port = clampInt(settings.wallpaperPort, 1024, 65535, WALLPAPER_PORT_DEFAULT)
     const token = (typeof settings.wallpaperToken === 'string' && settings.wallpaperToken.trim()) || wallpaperToken
+    const display = wallpaperDisplay(settings)
+    const displayKey = JSON.stringify(display)
     if (!want) {
       await stopWallpaper()
       wallpaperError = ''
       return false
     }
-    if (wallpaper && wallpaperPort === port && wallpaperTokenCurrent === token) return true
+    if (wallpaper && wallpaperPort === port && wallpaperTokenCurrent === token && wallpaperDisplayKey === displayKey) return true
     if (wallpaperBusy) { try { await wallpaperBusy } catch (_) { /* ignore */ } }
     wallpaperBusy = (async () => {
       await stopWallpaper()
@@ -212,20 +171,25 @@ export function apply(ctx) {
         wallpaper = await startWallpaperServer({
           port,
           token,
+          display,
           getStats: () => {
-            noteWallpaperWatch()
-            return buildStats(wallpaperRun())
+            return buildStats(wallpaperRun()).catch((error) => {
+              ctx.log.warn('wallpaper stats failed: ' + String((error && error.message) || error))
+              throw error
+            })
           }
         })
         wallpaperPort = port
         wallpaperTokenCurrent = token
         wallpaperToken = token
+        wallpaperDisplayKey = displayKey
         wallpaperError = ''
         ctx.log.info('wallpaper server listening on ' + wallpaper.url)
         return true
       } catch (error) {
         wallpaper = null
         wallpaperPort = 0
+        wallpaperDisplayKey = ''
         wallpaperError = String((error && error.message) || error)
         ctx.log.warn('wallpaper server failed: ' + wallpaperError)
         return false
@@ -269,6 +233,7 @@ export function apply(ctx) {
       const list = Array.isArray(listed && listed.sessions) ? listed.sessions : []
       store.upsertSessions(list)
     } catch (error) {
+      lastSessionsAt = 0
       ctx.log.warn('sessions poll failed: ' + String((error && error.message) || error))
     }
   }
@@ -359,6 +324,7 @@ export function apply(ctx) {
       })
       lastRateAt = at
     } catch (error) {
+      lastRateTry = 0
       ctx.log.warn('rate poll failed: ' + String((error && error.message) || error))
     } finally {
       rateBusy = false
@@ -373,13 +339,15 @@ export function apply(ctx) {
 
   ctx.lifecycle.add(() => {
     clearInterval(metricTimer)
-    stopWallpaperLive()
     stopWallpaper()
   })
 
   // Studio 重启后不需要先打开设置页：按最后一次保存的全局配置自动拉起壁纸服务
   wallpaperConfigReady.then((cfg) => {
-    if (cfg && cfg.enabled) return ensureWallpaper({ wallpaper: true, wallpaperPort: cfg.port, wallpaperToken: cfg.token })
+    if (!cfg || !cfg.enabled) return
+    return ensureWallpaper(Object.assign({}, cfg.display || {}, {
+      wallpaper: true, wallpaperPort: cfg.port, wallpaperToken: cfg.token
+    }))
   }).catch(() => { /* ignore */ })
 
   metrics.sample()
@@ -403,6 +371,21 @@ export function apply(ctx) {
     const role = await roleOf(run)
     const profiles = role === 'super_admin' ? null : [run.identity.profile || 'default']
     const snap = store.snapshot(profiles)
+    const workingByAgent = new Map()
+    const workingSessions = new Set()
+    for (const [id, rec] of wallpaperPending) {
+      if (!rec || !rec.working || now() - rec.at >= 60000) continue
+      workingSessions.add(id)
+      if (rec.agent) workingByAgent.set(rec.agent, (workingByAgent.get(rec.agent) || 0) + 1)
+    }
+    applyWallpaperActivity(snap, workingSessions)
+    if (snap.taskPlan && Array.isArray(snap.taskPlan.plans)) {
+      for (const plan of snap.taskPlan.plans) {
+        if (!workingSessions.has(plan.sessionId)) continue
+        plan.state = 'running'
+        plan.sessionActive = true
+      }
+    }
     snap.server = {
       version: VERSION,
       startedAt,
@@ -437,7 +420,27 @@ export function apply(ctx) {
     if (now() - store.usage.fetchedAt > 60000) await pollUsage(run)
     if (now() - store.skills.fetchedAt > 60000) await pollSkills(run)
     await pollSessions(run)
+    try { await pollRate(run) } catch (_) { /* ignore */ }
+    if (now() - liveToolAt > 10000) {
+      liveToolAt = now()
+      try { await backfillWallpaperTools() } catch (_) { /* ignore */ }
+    }
     const snap = store.snapshot(profiles)
+    const workingByAgent = new Map()
+    const workingSessions = new Set()
+    for (const [id, rec] of wallpaperPending) {
+      if (!rec || !rec.working || now() - rec.at >= 60000) continue
+      workingSessions.add(id)
+      if (rec.agent) workingByAgent.set(rec.agent, (workingByAgent.get(rec.agent) || 0) + 1)
+    }
+    applyWallpaperActivity(snap, workingSessions)
+    if (snap.taskPlan && Array.isArray(snap.taskPlan.plans)) {
+      for (const plan of snap.taskPlan.plans) {
+        if (!workingSessions.has(plan.sessionId)) continue
+        plan.state = 'running'
+        plan.sessionActive = true
+      }
+    }
     if (snap.current && snap.current.model && (!snap.context || !snap.context.limit)) {
       const model = snap.current.model
       const provider = snap.current.provider || ''
@@ -449,7 +452,29 @@ export function apply(ctx) {
           .finally(() => contextLimitBusy.delete(model))
       }
     }
-    return buildLegacyStats(snap, metrics.state, VERSION)
+    const stats = buildLegacyStats(snap, metrics.state, VERSION)
+    if (workingByAgent.size) {
+      let activeAgents = 0
+      for (const agent of stats.ai.agents) {
+        const count = workingByAgent.get(agent.agent)
+        if (!count) continue
+        agent.active = true
+        agent.running = 1
+        agent.activeSessions = count
+        activeAgents += 1
+      }
+      stats.ai.activeAgents = activeAgents
+    }
+    // 与插件页共用同一套忙碌判定；只信历史轮询确认的未完成回合，
+    // 不把可能卡在 working 的实时 slot 当作无限续命信号。
+    applyMotionSignals(stats.ai, {
+      now: now(),
+      liveEvent: null,
+      liveSlots: [],
+      pendingSessions: wallpaperPending.values(),
+      sessions: snap.recentSessions
+    })
+    return stats
   }
 
   registerRpc(ctx, contract, 'stats', async (_input, run) => buildStats(run))
@@ -484,6 +509,14 @@ export function apply(ctx) {
     }
   })
 
+  registerRpc(ctx, contract, 'wallpaper-status', async () => {
+    if (!wallpaper || typeof wallpaper.status !== 'function') return { viewers: 0, running: false }
+    let status = null
+    try { status = wallpaper.status() } catch (_) { status = null }
+    const viewers = status && Number.isFinite(status.viewers) ? Math.max(0, Math.round(status.viewers)) : 0
+    return { viewers, running: true }
+  })
+
   registerRpc(ctx, contract, 'save-settings', async (input, run) => {
     await wallpaperConfigReady
     const showIcon = input.showIcon !== false
@@ -506,7 +539,8 @@ export function apply(ctx) {
       await ctx.state.plugin.set('wallpaper', {
         enabled: savedSettings.wallpaper,
         port: savedSettings.wallpaperPort,
-        token
+        token,
+        display: wallpaperDisplay(savedSettings)
       })
     } catch (_) { /* 共享状态不可用时不阻断保存 */ }
     await ensureWallpaper(savedSettings)
