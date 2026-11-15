@@ -12,9 +12,10 @@
  * 与 src/session-state.mjs、src/tool-history.mjs 一样，构建时会被内联进 client.mjs。
  */
 
-const BUSY_WINDOW_MS = 5 * 60 * 1000   // 与 applyLive() 的 workingAgents 判定一致
-const SESSION_WINDOW_SEC = 180         // 与 store.ACTIVE_SEC 一致：会话仍在活动
-const STANDBY_AGE_SEC = 20             // 完全没有实时信号时的温和「待命」年龄
+const PENDING_TTL_MS = 60 * 1000       // 历史轮询每 10 秒一次；60 秒没刷新就当作结束
+const LIVE_TTL_MS = 10 * 60 * 1000     // 实时 slot 没有结束事件时的兜底上限
+const SESSION_GRACE_SEC = 60           // 仅用于 last_active 的短活动窗口
+const IDLE_AGE_SEC = 999               // 没有任何信号：明确告诉舞台“空闲”
 
 /** 会话列表里的 last_active 是 Unix 秒（见 docs/HOST_API.md）。 */
 function sessionAgeSec(now, raw) {
@@ -45,42 +46,52 @@ export function applyMotionSignals(ai, opts) {
 
   let activeAt = liveEvent && Number(liveEvent.at) ? Number(liveEvent.at) : 0
   let working = false
+  let lastPendingAt = 0
 
   for (const slot of liveSlots) {
     if (!slot || !slot.working) continue
+    // 没收到 run.completed / tool.completed 时，slot 可能一直停在 working；
+    // 超过 10 分钟没有新事件就不再当作正在工作。
+    if (slot.ts && now - Number(slot.ts) > LIVE_TTL_MS) continue
     working = true
-    if (Number(slot.ts) > activeAt) activeAt = Number(slot.ts)
+    const ts = Number(slot.ts) || now
+    if (ts > activeAt) activeAt = ts
   }
   for (const rec of pendingSessions) {
     // messagesWorking() 判定「最后一条不是已完成的助手回复」，即回合未结束。
-    if (!rec || !rec.working || now - Number(rec.at) >= BUSY_WINDOW_MS) continue
+    // rec.at 是最近一次历史轮询时间；60 秒没刷新说明轮询已停，不能再续命。
+    if (!rec || !rec.working || now - Number(rec.at) >= PENDING_TTL_MS) continue
     working = true
+    lastPendingAt = Math.max(lastPendingAt, Number(rec.at) || 0)
     if (Number(rec.at) > activeAt) activeAt = Number(rec.at)
   }
-  // 兜底：会话列表的 last_active 来自服务端 HTTP 轮询，不依赖实时事件通道
-  // （宿主 business-events 订阅异常时该通道可能完全没有事件）。
+  // 兜底：会话列表的 last_active 只用来给一个很短的“刚活动过”宽限期，
+  // 不再当成未完成回合。否则回合结束后它还会让画面继续转好几分钟。
   for (const meta of sessions) {
     const age = sessionAgeSec(now, meta && meta.lastActive)
-    if (age === null || age > SESSION_WINDOW_SEC) continue
-    working = true
+    if (age === null || age > SESSION_GRACE_SEC) continue
     const at = now - age * 1000
     if (at > activeAt) activeAt = at
   }
 
-  // 有实时活动就用真实年龄（tokens/s 之外的主要能量来源）；
-  // 完全没有信号时给一个温和的待命值，让舞台保持低速运转而不是彻底冻结。
-  // 一旦收到实时事件，下一帧就会自动接管。
-  const ageSec = activeAt ? Math.max(0, Math.round((now - activeAt) / 1000)) : STANDBY_AGE_SEC
-
+  const ageSec = activeAt ? Math.max(0, Math.round((now - activeAt) / 1000)) : IDLE_AGE_SEC
   ai.lastEventAgeSec = ageSec
-  // 有实时事件时 applyLive() 已写入具体类型；这里只给「完全无信号」的待命态
-  // 一个可读标签，避免 HUD 出现「空闲 · 20秒前」这种自相矛盾的文字。
   if (!ai.lastEvent) ai.lastEvent = working ? '运行中' : '待命'
-  // 长回合（内部模型不写 usage、tokens/s 恒为 0）靠这三个备用信号续命；
-  // 只在确实判断「仍在工作」时给，避免回合结束后又空转十分钟。
-  ai.planActive = working
-  ai.planAgeSec = working ? ageSec : null
-  ai.pendingSec = working ? ageSec : null
+  ai.pendingSec = working ? Math.max(0, Math.round((now - (lastPendingAt || activeAt)) / 1000)) : null
   ai.jobsRunning = working ? 1 : 0
+
+  // 任务计划只有在“有真实 running 计划且仍有工作信号（或刚开始 60 秒内）”时才续命；
+  // 不再把 working 直接写成 planActive，避免没有计划时也空转。
+  const plans = ai.taskPlan && Array.isArray(ai.taskPlan.plans) ? ai.taskPlan.plans : []
+  const running = plans.find((plan) => plan && plan.state === 'running')
+  if (running) {
+    const planAge = typeof running.ageSec === 'number' ? running.ageSec : null
+    const fresh = working || planAge === null || planAge <= SESSION_GRACE_SEC
+    ai.planActive = fresh
+    ai.planAgeSec = fresh ? (planAge === null ? ageSec : planAge) : null
+  } else if (plans.length) {
+    ai.planActive = false
+    ai.planAgeSec = null
+  }
   return ai
 }

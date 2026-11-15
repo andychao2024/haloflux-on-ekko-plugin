@@ -4,7 +4,7 @@ import { createStore } from '../src/store.mjs'
 import { buildLegacyStats } from '../src/legacy.mjs'
 import { applyMotionSignals } from '../src/motion-signals.mjs'
 
-/** 复刻 ai-link.js updateMotion() 的 busy 判定，用于验证修复确实让舞台转起来。 */
+/** 复刻 ai-link.js updateMotion() 的 busy 判定，用于验证舞台启停。 */
 function motionOf(ai) {
   const isNum = (v) => typeof v === 'number' && isFinite(v)
   const C = { busyGraceSec: 30, pendingBusySec: 600, planBusySec: 900 }
@@ -21,7 +21,6 @@ function motionOf(ai) {
 function pluginStats() {
   const store = createStore()
   const now = Math.floor(Date.now() / 1000)
-  // 一个「正在工作」的 agent：store 里没有任何事件/计划，正是插件的真实处境
   store.upsertSessions([
     { id: 's1', profile: 'default', agent: 'claude', last_active: now, message_count: 5 }
   ])
@@ -37,7 +36,7 @@ test('插件原始 /stats 会让舞台冻结（回归基线）', () => {
   assert.deepEqual(motionOf(ai), { busy: false, rateTarget: 0 })
 })
 
-test('实时事件 + 工作会话 -> 舞台恢复运转，且能量不再归零', () => {
+test('实时事件 + 工作会话 -> 舞台运转', () => {
   const d = pluginStats()
   const now = Date.now()
   applyMotionSignals(d.ai, {
@@ -47,11 +46,9 @@ test('实时事件 + 工作会话 -> 舞台恢复运转，且能量不再归零'
     pendingSessions: [{ working: true, at: now - 3000 }]
   })
   assert.equal(d.ai.lastEventAgeSec, 1)
-  assert.equal(d.ai.planActive, true)
   assert.equal(d.ai.jobsRunning, 1)
-  assert.equal(d.ai.pendingSec, 1)
+  assert.equal(d.ai.pendingSec, 3)
   assert.deepEqual(motionOf(d.ai), { busy: true, rateTarget: 1 })
-  // updateVisuals() 需要 d.link + 数值 tokensPerSec 才会产生能量；两者已具备
   assert.equal(typeof d.ai.tokensPerSec, 'number')
   assert.ok(d.link)
 })
@@ -59,7 +56,6 @@ test('实时事件 + 工作会话 -> 舞台恢复运转，且能量不再归零'
 test('长工具调用（tokens/s 恒为 0）靠 pendingSec 续命', () => {
   const d = pluginStats()
   const now = Date.now()
-  // 45 秒前开始工作、之后没有新事件：超过 busyGraceSec(30)，但仍在 600s 内
   applyMotionSignals(d.ai, {
     now,
     liveEvent: { type: 'tool', at: now - 45000 },
@@ -71,42 +67,40 @@ test('长工具调用（tokens/s 恒为 0）靠 pendingSec 续命', () => {
   assert.deepEqual(motionOf(d.ai), { busy: true, rateTarget: 1 })
 })
 
-test('回合结束后不再空转（超过 5 分钟的工作标记被忽略）', () => {
+test('回合结束后自动停止，不再空转', () => {
   const d = pluginStats()
   const now = Date.now()
   applyMotionSignals(d.ai, {
     now,
     liveEvent: null,
-    liveSlots: [{ working: false, ts: now - 400000 }],
-    pendingSessions: [{ working: true, at: now - 400000 }]   // 6分40秒前，已过期
+    liveSlots: [{ working: false, ts: now - 1000 }],
+    pendingSessions: [{ working: true, at: now - 400000 }]
   })
   assert.equal(d.ai.planActive, false)
   assert.equal(d.ai.pendingSec, null)
   assert.equal(d.ai.jobsRunning, 0)
-  // 没有任何实时证据时给温和待命值：舞台低速运转而非彻底冻结
-  assert.equal(d.ai.lastEventAgeSec, 20)
-  assert.equal(motionOf(d.ai).busy, true)
+  assert.equal(d.ai.lastEventAgeSec, 999)
+  assert.equal(motionOf(d.ai).busy, false)
   assert.equal(d.ai.lastEvent, '待命')
 })
 
-test('实时事件通道不通时，服务端会话活动时间仍能驱动舞台', () => {
+test('实时通道不通时，last_active 只给一个短宽限期', () => {
   const d = pluginStats()
   const now = Date.now()
-  const lastActive = Math.floor(now / 1000) - 5   // Unix 秒，5 秒前还活跃
   applyMotionSignals(d.ai, {
     now,
     liveEvent: null,
     liveSlots: [],
     pendingSessions: [],
-    sessions: [{ id: 's1', lastActive }]
+    sessions: [{ id: 's1', lastActive: Math.floor(now / 1000) - 5 }]
   })
-  assert.equal(d.ai.planActive, true)
-  assert.equal(d.ai.jobsRunning, 1)
+  assert.equal(d.ai.planActive, false)
+  assert.equal(d.ai.jobsRunning, 0)
   assert.ok(d.ai.lastEventAgeSec <= 6)
   assert.equal(motionOf(d.ai).rateTarget, 1)
 })
 
-test('陈旧会话（超过 180 秒）不会被误判成工作中', () => {
+test('陈旧会话（超过 60 秒）不会被误判成工作中', () => {
   const d = pluginStats()
   const now = Date.now()
   applyMotionSignals(d.ai, {
@@ -115,24 +109,40 @@ test('陈旧会话（超过 180 秒）不会被误判成工作中', () => {
   })
   assert.equal(d.ai.planActive, false)
   assert.equal(d.ai.pendingSec, null)
-  assert.equal(d.ai.lastEventAgeSec, 20)   // 只保留温和待命
+  assert.equal(d.ai.lastEventAgeSec, 999)
+  assert.equal(motionOf(d.ai).busy, false)
 })
 
 test('兼容毫秒时间戳的 last_active', () => {
   const d = pluginStats()
   const now = Date.now()
   applyMotionSignals(d.ai, { now, sessions: [{ lastActive: now - 3000 }] })
-  assert.equal(d.ai.planActive, true)
+  assert.equal(d.ai.planActive, false)
   assert.ok(d.ai.lastEventAgeSec <= 4)
+  assert.equal(motionOf(d.ai).busy, true)
 })
 
-test('没有任何实时信号时仍保持待命运转', () => {
+test('运行中的任务计划可以作为额外的忙碌信号，但过期后停止', () => {
+  const d = pluginStats()
+  const now = Date.now()
+  d.ai.taskPlan = { plans: [{ state: 'running', ageSec: 5 }] }
+  applyMotionSignals(d.ai, { now })
+  assert.equal(d.ai.planActive, true)
+  assert.equal(motionOf(d.ai).busy, true)
+
+  d.ai.taskPlan = { plans: [{ state: 'running', ageSec: 120 }] }
+  applyMotionSignals(d.ai, { now })
+  assert.equal(d.ai.planActive, false)
+  assert.equal(motionOf(d.ai).busy, false)
+})
+
+test('没有任何实时信号时不自动运转', () => {
   const d = pluginStats()
   applyMotionSignals(d.ai, { now: Date.now() })
-  assert.equal(d.ai.lastEventAgeSec, 20)
+  assert.equal(d.ai.lastEventAgeSec, 999)
   assert.equal(d.ai.planActive, false)
   assert.equal(d.ai.lastEvent, '待命')
-  assert.equal(motionOf(d.ai).rateTarget, 1)
+  assert.equal(motionOf(d.ai).rateTarget, 0)
 })
 
 test('不产生 undefined 字段（SDK 会拒绝整份 JSON）', () => {

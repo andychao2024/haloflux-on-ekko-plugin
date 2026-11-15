@@ -280,6 +280,7 @@ export function apply(ctx) {
       compat: !!saved.compat,
       gpu: saved.gpu !== false,
       showIcon: saved.showIcon !== false,
+      music: !!saved.music,
       toolRows: clampInt(saved.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(saved.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : ''
@@ -293,6 +294,7 @@ export function apply(ctx) {
       compat: !!input.compat,
       gpu: input.gpu !== false,
       showIcon,
+      music: !!input.music,
       toolRows: clampInt(input.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(input.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : ''

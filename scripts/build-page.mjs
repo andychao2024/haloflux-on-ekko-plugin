@@ -8,7 +8,7 @@
  * 用法：node scripts/build-page.mjs [docker 程序目录]
  * 输出：page-html.mjs
  */
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -20,6 +20,9 @@ const html = readFileSync(join(dir, 'index.html'), 'utf8')
 const wp = readFileSync(join(dir, 'wp.js'), 'utf8')
 const ai = readFileSync(join(dir, 'ai-link.js'), 'utf8')
 const build = (ai.match(/var BUILD = '([^']+)'/) || [])[1] || 'v0.0'
+// 背景音乐内联为 data URL：插件包里没有静态服务器，音频必须随页面一起加载
+const bgmPath = join(root, 'assets/bgm.mp3')
+const bgm = existsSync(bgmPath) ? 'data:audio/mpeg;base64,' + readFileSync(bgmPath).toString('base64') : ''
 
 /* 只做一处口径改动：面板标题里的 GPU 换成「磁盘 IO」。
    GPU 曲线本身保留，由插件设置里的「显示显卡」开关在运行时控制
@@ -30,9 +33,6 @@ function mustReplace(text, from, to, label) {
 }
 let aiPatched = ai
 aiPatched = mustReplace(aiPatched, "'CPU / GPU 负载'", "'CPU / 磁盘 IO'", 'CPU/GPU 面板标题')
-aiPatched = mustReplace(aiPatched,
-  'try { buildBgmToggle(); } catch (e) { /* ignore */ }',
-  'try { /* 背景音乐功能已移除 */ } catch (e) { /* ignore */ }', 'BGM 开关')
 aiPatched = mustReplace(aiPatched,
   "var t = '代理调度' + (list.length ? ' · ' + list.length : '');",
   "var t = '代理调度';", '代理调度标题计数')
@@ -62,6 +62,13 @@ const shim = `
       try { Object.defineProperty(window, name, { value: memoryStore(), configurable: true }); } catch (_) {}
     }
   });
+  /* 插件设置里的音乐开关：BGM 模块启动时读取这个键 */
+  try {
+    var prefs = window.__hlSettings || {};
+    var store = null;
+    try { window.localStorage.getItem('__hl_probe__'); store = window.localStorage; } catch (e) { store = null; }
+    if (store) store.setItem('haloflux.bgm.v1', JSON.stringify({ on: !!prefs.music, vol: 60 }));
+  } catch (e) { /* ignore */ }
 
   var settings = { anim: true, fps: 30, gpu: true, toolRows: 8, agentRows: 8 };
   var seq = 0, pending = {};
@@ -157,30 +164,20 @@ const control = `
 })();
 `
 
-/* 只移除 BGM IIFE，保留同一个 <script> 里在它之前的舞台/画布引擎代码。 */
-function stripBgmScript(text) {
-  const start = text.indexOf('(function initBGM() {')
-  if (start < 0) throw new Error('未找到页面 BGM 模块')
-  const marker = text.indexOf('window.__bgm = {', start)
-  const end = marker < 0 ? -1 : text.indexOf('})();', marker)
-  if (end < 0) throw new Error('BGM 模块结构已变')
-  return text.slice(0, start) + text.slice(end + '})();'.length)
-}
-
 let out = html
-  // 完全去掉背景音乐：移除音频元素与自带 BGM 模块，页面不再加载 3.8MB 音频。
-  .replace(/<audio id="bgmAudio"[^>]*><\/audio>/, '')
+  .replace(/<audio id="bgmAudio"[^>]*><\/audio>/, bgm
+    ? '<audio id="bgmAudio" data-src="' + bgm + '" loop preload="auto" playsinline></audio>'
+    : '<audio id="bgmAudio" loop preload="auto" playsinline></audio>')
   .replace(/<body([^>]*)>/, `<body$1>\n<script>${escapeScript(shim)}</script>\n<script>${escapeScript(control)}</script>`)
   .replace('<script src="wp.js"></script>', `<script>${escapeScript(wp)}</script>`)
   .replace(/<script src="ai-link\.js[^"]*"><\/script>/, `<script>${escapeScript(aiPatched)}</script>`)
 
-out = stripBgmScript(out)
 out = out.replace(/<title>[^<]*<\/title>/, '<title>HALOFLUX ON Ekko</title>')
 
 out = out.replace('</head>', `<style>
 /* 插件内只做最小改动，其余布局/动效/卡片尺寸与 docker 版完全一致：
    1. 背景色对齐页面自身 --bg
-   2. 右上角控制条隐藏（插件不提供背景音乐） */
+   2. 右上角控制条隐藏（背景音乐在插件设置页开关） */
 html,body{background:#08090b !important}
 #aix-topbar{display:none !important}
 </style></head>`)
