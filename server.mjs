@@ -6,7 +6,7 @@ import { createMetrics } from './src/metrics.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.23'
+const VERSION = '0.8.25'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -29,6 +29,9 @@ const AGENT_ROWS_DEFAULT = 8
 const AGENT_ROWS_MIN = 3
 const AGENT_ROWS_MAX = 12
 
+// Studio 侧栏里的插件入口由用户导航配置控制；插件设置只负责增删这一项。
+const NAV_ITEM = 'plugin:haloflux-ai-link/dashboard'
+
 const clampInt = (value, lo, hi, fallback) => {
   const n = Number(value)
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : fallback
@@ -47,6 +50,24 @@ export function apply(ctx) {
   let lastSkillTry = 0
   let lastRateTry = 0
   const roleCache = new Map()
+
+  async function readSettings(run) {
+    return (await run.state.user.namespace('haloflux').get('settings')) || {}
+  }
+
+  /**
+   * 把插件入口同步到当前用户的 Studio 导航配置。
+   * 返回 true 表示已经一致或写入成功；宿主拒绝写入时抛错，由调用方决定是否降级。
+   */
+  async function syncNavigation(run, showIcon) {
+    const current = await run.host.request('/api/navigation')
+    const items = current && Array.isArray(current.items) ? current.items.slice() : []
+    const has = items.includes(NAV_ITEM)
+    if (showIcon === has) return true
+    const next = showIcon ? items.concat(NAV_ITEM) : items.filter((item) => item !== NAV_ITEM)
+    await run.host.request('/api/navigation', { method: 'PUT', body: { items: next } })
+    return true
+  }
 
   let lastSnapshotDump = 0
   const writeDump = (name, value) => {
@@ -253,11 +274,12 @@ export function apply(ctx) {
   })
 
   registerRpc(ctx, contract, 'get-settings', async (_input, run) => {
-    const saved = (await run.state.user.namespace('haloflux').get('settings')) || {}
+    const saved = await readSettings(run)
     return {
       anim: saved.anim !== false,
       compat: !!saved.compat,
       gpu: saved.gpu !== false,
+      showIcon: saved.showIcon !== false,
       toolRows: clampInt(saved.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(saved.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : ''
@@ -265,14 +287,34 @@ export function apply(ctx) {
   })
 
   registerRpc(ctx, contract, 'save-settings', async (input, run) => {
+    const showIcon = input.showIcon !== false
     await run.state.user.namespace('haloflux').set('settings', {
       anim: input.anim !== false,
       compat: !!input.compat,
       gpu: input.gpu !== false,
+      showIcon,
       toolRows: clampInt(input.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(input.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : ''
     })
-    return { ok: true }
+    let navSynced = false
+    try {
+      navSynced = await syncNavigation(run, showIcon)
+    } catch (error) {
+      ctx.log.warn('navigation sync failed: ' + String((error && error.message) || error))
+    }
+    return { ok: true, navSynced }
+  })
+
+  registerRpc(ctx, contract, 'ensure-navigation', async (_input, run) => {
+    const saved = await readSettings(run)
+    const showIcon = saved.showIcon !== false
+    let synced = false
+    try {
+      synced = await syncNavigation(run, showIcon)
+    } catch (error) {
+      ctx.log.warn('navigation sync failed: ' + String((error && error.message) || error))
+    }
+    return { showIcon, synced }
   })
 }

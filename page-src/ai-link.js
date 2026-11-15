@@ -1623,9 +1623,8 @@
     '.aix-pane.ap{display:flex;flex-direction:column;gap:3px;}',
     '.aix-pane.ag-dense{gap:1px;}',
     '.aix-pane .ag{display:flex;gap:4px;align-items:center;position:relative;overflow:hidden;',
-    'flex:1;min-height:0;margin-bottom:0;}',
-    '.aix-pane .ag .cell{flex:1;height:6px;background:#1d1f24;transition:background-color .45s ease,box-shadow .45s ease;}',
-    '.aix-pane.ag-dense .ag .cell{height:5px;}',
+    'flex:1;min-height:0;margin-bottom:0;font-size:var(--ag-font,9.5px);}',
+    '.aix-pane .ag .cell{flex:1;height:var(--ag-cell,6px);background:#1d1f24;transition:background-color .45s ease,box-shadow .45s ease;}',
     '.aix-pane .ag .cell.on{background:rgba(var(--agr,152,224,207),.26);box-shadow:none;}',
     '.aix-pane .ag.on .cell.on{background:linear-gradient(90deg,rgba(var(--agr,152,224,207),.45),',
     'var(--agc,#98e0cf),#f4f5f7,var(--agc,#98e0cf),rgba(var(--agr,152,224,207),.45));',
@@ -2516,6 +2515,14 @@
       p.agRot = 0;
     }
 
+    // 字号与格高随「实际显示行数 / 面板高度」缩放：行少时字大，行多时收紧
+    var paneH = p.el.clientHeight || 0;
+    var gap = shown.length > 6 ? 1 : 3;
+    var rowH = paneH > 0 ? (paneH - gap * Math.max(0, shown.length - 1)) / Math.max(1, shown.length) : 12;
+    var agFs = Math.max(7, Math.min(10.5, rowH * 0.62));
+    p.el.style.setProperty('--ag-font', agFs.toFixed(1) + 'px');
+    p.el.style.setProperty('--ag-cell', Math.max(3.5, Math.min(6, rowH * 0.42)).toFixed(1) + 'px');
+
     ensureAgentRows(p, Math.max(4, shown.length));
     for (var i = 0; i < p.rows.length; i++) {
       var row = p.rows[i];
@@ -2724,32 +2731,38 @@
       if (!list.length) {
         label(o.x, '当前没有工具调用', 2, Math.max(20, o.h / 2 - 6), '#4a4f57');
       } else {
-        // 行高压在 9–13px：设置的行数多时自动压缩，而不是把最后几行挤出面板
-        var y0 = 14, lh = Math.max(9, Math.min(13, (o.h - y0 - 2) / Math.max(1, list.length)));
-        var rows = Math.min(list.length, Math.floor((o.h - y0) / lh));
+        // 行高与字号一起随设置条数缩放：条数少时放大，条数多时压缩，始终占满面板
+        var y0 = 14, avail = Math.max(9, o.h - y0 - 2);
+        var rows = Math.max(1, Math.min(list.length, Math.floor(avail / 9)));
+        var rowH = avail / rows;
+        var fs = Math.max(7, Math.min(11, rowH * 0.72));
+        var rowFont = fs.toFixed(1) + 'px ui-monospace,"Cascadia Mono",Consolas,monospace';
+        var lh = Math.min(15, Math.max(fs + 2, rowH));
+        var dot = Math.max(3, Math.min(4.5, fs * 0.42));
         for (var ti = 0; ti < rows; ti++) {
           var t = list[ti] || {};
           var yy = y0 + ti * lh;
+          var ty = yy + Math.max(0, (lh - fs) / 2);
           var col = t.state === 'error' ? '#ff6b6b' : (t.state === 'running' ? '#98e0cf' : '#7b818b');
           o.x.fillStyle = col;
-          o.x.fillRect(2, yy + 3.5, 3.5, 3.5);
-          o.x.font = FONT_SM;
+          o.x.fillRect(2, yy + (lh - dot) / 2, dot, dot);
+          o.x.font = rowFont;
           var nmText = (showAgent && t.agent ? agentShort(t.agent) + '·' : '') + String(t.name || '?');
           var nm = clipText(o.x, nmText, showAgent ? 104 : 86);
-          label(o.x, nm, 10, yy, col === '#7b818b' ? '#b9bec6' : col);
+          label(o.x, nm, 10, ty, col === '#7b818b' ? '#b9bec6' : col, rowFont);
           var ageTxt = isNum(t.ageSec)
             ? (t.ageSec < 60 ? t.ageSec + 's' : (t.ageSec < 3600 ? Math.round(t.ageSec / 60) + 'm' : Math.round(t.ageSec / 3600) + 'h'))
             : '';
+          o.x.font = rowFont;
           var ageW = ageTxt ? o.x.measureText(ageTxt).width + 4 : 0;
-          o.x.font = FONT_SM;
           var nameW = o.x.measureText(nm).width;
           var argMax = o.w - 10 - nameW - 6 - ageW - 3;
           var argTxt = t.arg ? clipText(o.x, String(t.arg), argMax) : '';
-          if (argTxt) label(o.x, argTxt, 10 + nameW + 6, yy, '#5d626a');
+          if (argTxt) label(o.x, argTxt, 10 + nameW + 6, ty, '#5d626a', rowFont);
           if (ageTxt) {
-            o.x.font = FONT_SM;
+            o.x.font = rowFont;
             o.x.textAlign = 'right';
-            label(o.x, ageTxt, o.w - 3, yy, t.state === 'running' ? '#6f8f89' : '#4d525a');
+            label(o.x, ageTxt, o.w - 3, ty, t.state === 'running' ? '#6f8f89' : '#4d525a', rowFont);
             o.x.textAlign = 'left';
           }
         }

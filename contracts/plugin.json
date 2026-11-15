@@ -29,6 +29,10 @@
           "type": "boolean",
           "description": "在看板里显示显卡（GPU）曲线与显存信息；默认 true。"
         },
+        "showIcon": {
+          "type": "boolean",
+          "description": "在 Studio 侧栏显示插件入口图标；默认 true。"
+        },
         "toolRows": {
           "type": "integer",
           "description": "工具调用面板显示的条数；默认 8，最小 3，最大 15。超出范围的取值按边界保存。",
@@ -52,6 +56,7 @@
         "anim",
         "compat",
         "gpu",
+        "showIcon",
         "title",
         "toolRows"
       ],
@@ -67,10 +72,34 @@
           "enum": [
             true
           ]
+        },
+        "navSynced": {
+          "type": "boolean",
+          "description": "侧栏入口是否已同步为当前开关状态；宿主拒绝导航写入时为 false。"
         }
       },
       "required": [
+        "navSynced",
         "ok"
+      ],
+      "additionalProperties": false
+    },
+    "navigation": {
+      "type": "object",
+      "description": "当前用户的侧栏入口同步结果。",
+      "properties": {
+        "showIcon": {
+          "type": "boolean",
+          "description": "保存的侧栏入口开关。"
+        },
+        "synced": {
+          "type": "boolean",
+          "description": "侧栏入口是否已与开关一致。"
+        }
+      },
+      "required": [
+        "showIcon",
+        "synced"
       ],
       "additionalProperties": false
     },
@@ -123,6 +152,11 @@
       "description": "保存当前用户的显示设置。",
       "input": "settings",
       "output": "saved"
+    },
+    "ensure-navigation": {
+      "description": "按当前开关把插件入口同步到 Studio 侧栏；页面挂载时调用。",
+      "input": "empty",
+      "output": "navigation"
     },
     "stats": {
       "description": "返回 /stats 兼容快照。",

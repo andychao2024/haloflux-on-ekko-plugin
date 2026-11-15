@@ -7,7 +7,7 @@ const contract = assertContracts(JSON.parse(readFileSync(new URL('../contracts/p
 
 test('settings model requires the seven declared fields', () => {
   const value = {
-    anim: true, compat: false, gpu: true,
+    anim: true, compat: false, gpu: true, showIcon: true,
     toolRows: 8, agentRows: 8, title: 'HALOFLUX ON Ekko'
   }
   assert.deepEqual(validateModel(contract, 'settings', value), value)

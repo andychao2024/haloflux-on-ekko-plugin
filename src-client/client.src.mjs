@@ -25,11 +25,15 @@ function pageWithTitle(html, title) {
 }
 
 export async function mount(root, ctx) {
+  // 侧栏入口开关默认开启：每次打开看板或设置页时顺手校正一次。
+  // Studio 升级后导航配置可能被重置，这里能把插件入口自动补回来。
+  ctx.rpc.call('ensure-navigation').catch(() => {})
+
   if (ctx.view === 'settings') return mountSettings(root, ctx)
 
   // 宿主侧 RPC 没有超时：通道没建立或请求挂住时，await 会永远不返回，
   // 面板就停在空白。这里最多等 3 秒，拿不到就先按默认设置渲染。
-  const DEFAULTS = { anim: true, compat: false, gpu: true, toolRows: 8, agentRows: 8, title: '' }
+  const DEFAULTS = { anim: true, compat: false, gpu: true, showIcon: true, toolRows: 8, agentRows: 8, title: '' }
   const settings = await Promise.race([
     ctx.rpc.call('get-settings').catch(() => null),
     new Promise((resolve) => setTimeout(() => resolve(null), 3000))
@@ -356,6 +360,23 @@ export async function mount(root, ctx) {
       ai.cacheHitRate = liveRate.cacheHit
     }
 
+    // ---- 动效忙碌信号（关键修复）----
+    // buildLegacyStats() 返回的 lastEventAgeSec / planActive / pendingSec /
+    // jobsRunning 一律是 null：插件服务端的 store 没有接入会话事件流。
+    // ai-link.js 的 updateMotion() 因此把 CAM.spinActive 判成 false，节拍、
+    // 运镜、圆环钩子全部停摆；updateVisuals() 也把 FLOW 飞出物压到接近 0。
+    // 结果就是数据面板在刷新、舞台却完全静止。用页面端的实时事件与会话
+    // 历史重建这些信号（纯函数实现见 src/motion-signals.mjs）。
+    applyMotionSignals(ai, {
+      now: Date.now(),
+      liveEvent,
+      liveSlots: live.values(),
+      pendingSessions: pendingSessions.values(),
+      // 服务端的 activeSessions/recentSessions.lastActive 是 HTTP 轮询结果，
+      // 即使实时事件通道不通也能判定「有 agent 在活动」。
+      sessions: (d.activeSessions || []).concat(d.recentSessions || [])
+    })
+
     // 实时层：正在收到事件的 Agent 立即标成活跃，不依赖 session.last_active
     // （CodeBuddy 等外部 Agent 的 last_active 通常在回合结束后才更新）。
     const workingAgents = new Set()
@@ -452,6 +473,7 @@ function mountSettings(root, ctx) {
       <input id="hls-title" type="text" maxlength="80" placeholder="Ekko Studio / Rock5 ITX RK3588"
         style="flex:1;min-width:280px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.2)">
     </label>
+    <label><input type="checkbox" id="hls-show-icon"> 在 Studio 侧栏显示插件图标（默认开启；关闭后入口会隐藏）</label>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式，默认开启）</label>
     <label><input type="checkbox" id="hls-gpu"> 显示显卡（GPU 曲线与显存，默认开启；未检测到显卡时不显示）</label>
     <label>工具调用显示条数
@@ -474,6 +496,7 @@ function mountSettings(root, ctx) {
     </table>
   `
   root.append(wrap)
+  const showIconBox = wrap.querySelector('#hls-show-icon')
   const animBox = wrap.querySelector('#hls-anim')
   const gpuBox = wrap.querySelector('#hls-gpu')
   const compatBox = wrap.querySelector('#hls-compat')
@@ -482,16 +505,18 @@ function mountSettings(root, ctx) {
   const titleInput = wrap.querySelector('#hls-title')
   const msg = wrap.querySelector('#hls-msg')
   ctx.rpc.call('get-settings').then((s) => {
+    showIconBox.checked = !(s && s.showIcon === false)
     animBox.checked = !(s && s.anim === false)
     gpuBox.checked = !(s && s.gpu === false)
     compatBox.checked = !!(s && s.compat)
     toolRowsBox.value = String(clampInt(s && s.toolRows, 3, MAX_TOOL_ROWS, 8))
     agentRowsBox.value = String(clampInt(s && s.agentRows, 3, MAX_AGENT_ROWS, 8))
     titleInput.value = (s && s.title) || ''
-  }).catch(() => { animBox.checked = true; gpuBox.checked = true })
+  }).catch(() => { showIconBox.checked = true; animBox.checked = true; gpuBox.checked = true })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
-      await ctx.rpc.call('save-settings', {
+      const saved = await ctx.rpc.call('save-settings', {
+        showIcon: !!showIconBox.checked,
         anim: !!animBox.checked,
         gpu: !!gpuBox.checked,
         compat: !!compatBox.checked,
@@ -499,7 +524,9 @@ function mountSettings(root, ctx) {
         agentRows: clampInt(agentRowsBox.value, 3, MAX_AGENT_ROWS, 8),
         title: titleInput.value.trim()
       })
-      msg.textContent = '已保存，重新打开看板生效'
+      msg.textContent = saved && saved.navSynced === false
+        ? '设置已保存，但 Studio 拒绝修改侧栏入口；可到 Studio 导航设置里手动调整'
+        : '已保存，重新打开看板生效'
     } catch (error) {
       msg.textContent = '保存失败：' + (error.message || error)
     }

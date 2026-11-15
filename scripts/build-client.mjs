@@ -15,10 +15,12 @@ const toolHistory = readFileSync(join(root, 'src/tool-history.mjs'), 'utf8')
   .replace(/^export function parseToolMessages/m, 'function parseToolMessages')
 const sessionState = readFileSync(join(root, 'src/session-state.mjs'), 'utf8')
   .replace(/^export function messagesWorking/m, 'function messagesWorking')
+const motionSignals = readFileSync(join(root, 'src/motion-signals.mjs'), 'utf8')
+  .replace(/^export function applyMotionSignals/m, 'function applyMotionSignals')
 const page = readFileSync(join(root, 'page-html.mjs'), 'utf8')
 const html = JSON.parse(page.slice(page.indexOf('export const PAGE_HTML = ') + 'export const PAGE_HTML = '.length, page.indexOf('\nexport const PAGE_BUILD')).trim())
 
 const out = '/* 由 scripts/build-client.mjs 生成，勿手改。源码：src-client/client.src.mjs */\n' +
-  'const PAGE_HTML = ' + JSON.stringify(html) + '\n' + src + '\n' + toolHistory + '\n' + sessionState
+  'const PAGE_HTML = ' + JSON.stringify(html) + '\n' + src + '\n' + toolHistory + '\n' + sessionState + '\n' + motionSignals
 writeFileSync(join(root, 'client.mjs'), out)
 console.log('client.mjs', out.length, 'bytes')

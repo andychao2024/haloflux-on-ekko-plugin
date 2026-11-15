@@ -77,9 +77,12 @@ const shim = `
     window.__hlToolRows = rowLimit(settings.toolRows, 3, 15);
     window.__hlAgentRows = rowLimit(settings.agentRows, 3, 12);
     if (window.__stageSetFps) window.__stageSetFps(settings.fps === 60 ? 60 : 30);
-    if (window.__stagePause) {
-      window.__stagePause(settings.anim === false || document.visibilityState === 'hidden');
-    }
+    /* 关键：不要用 document.visibilityState 去暂停舞台。
+       Studio 用 display:none 切换插件视图时，iframe 的 visibilitychange 并不
+       保证触发；一旦在 hidden 时把 __wpPaused 置 true，恢复显示后没有人把它
+       清回来，index.html 的 frame() 会永远跳过 drawStage()，画面彻底冻结。
+       后台标签页的 requestAnimationFrame 本来就会被浏览器自动节流，无需手停。 */
+    if (window.__stagePause) window.__stagePause(settings.anim === false);
     var canvas = document.getElementById('stage');
     if (canvas) canvas.style.visibility = settings.anim === false ? 'hidden' : 'visible';
     if (settings.compat) {
