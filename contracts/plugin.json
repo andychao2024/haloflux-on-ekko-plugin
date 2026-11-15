@@ -50,10 +50,6 @@
           "description": "看板左上角标题；空字符串使用默认标题。",
           "maxLength": 80
         },
-        "music": {
-          "type": "boolean",
-          "description": "启用背景音乐；默认 false。开启后第一次点击页面开始播放。"
-        },
         "wallpaper": {
           "type": "boolean",
           "description": "启用独立端口的壁纸服务；默认 false。"
@@ -79,7 +75,6 @@
         "showIcon",
         "title",
         "toolRows",
-        "music",
         "wallpaper",
         "wallpaperPort",
         "wallpaperToken"

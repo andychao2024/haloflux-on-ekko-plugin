@@ -8,7 +8,7 @@ import { buildLegacyStats } from './src/legacy.mjs'
 import { startWallpaperServer } from './src/wallpaper-server.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.27'
+const VERSION = '0.8.28'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -369,7 +369,6 @@ export function apply(ctx) {
       compat: !!saved.compat,
       gpu: saved.gpu !== false,
       showIcon: saved.showIcon !== false,
-      music: !!saved.music,
       wallpaper: !!saved.wallpaper,
       wallpaperPort: clampInt(saved.wallpaperPort, 1024, 65535, WALLPAPER_PORT_DEFAULT),
       wallpaperToken: wallpaperToken,
@@ -389,7 +388,6 @@ export function apply(ctx) {
       compat: !!input.compat,
       gpu: input.gpu !== false,
       showIcon,
-      music: !!input.music,
       wallpaper: !!input.wallpaper,
       wallpaperPort: clampInt(input.wallpaperPort, 1024, 65535, WALLPAPER_PORT_DEFAULT),
       wallpaperToken: token,

@@ -62,14 +62,6 @@ const shim = `
       try { Object.defineProperty(window, name, { value: memoryStore(), configurable: true }); } catch (_) {}
     }
   });
-  /* 插件设置里的音乐开关：BGM 模块启动时读取这个键 */
-  try {
-    var prefs = window.__hlSettings || {};
-    var store = null;
-    try { window.localStorage.getItem('__hl_probe__'); store = window.localStorage; } catch (e) { store = null; }
-    if (store) store.setItem('haloflux.bgm.v1', JSON.stringify({ on: !!prefs.music, vol: 60 }));
-  } catch (e) { /* ignore */ }
-
   var settings = { anim: true, fps: 30, gpu: true, toolRows: 8, agentRows: 8 };
   var seq = 0, pending = {};
   function rowLimit(value, lo, hi) {

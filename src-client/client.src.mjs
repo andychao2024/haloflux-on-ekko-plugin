@@ -33,7 +33,7 @@ export async function mount(root, ctx) {
 
   // 宿主侧 RPC 没有超时：通道没建立或请求挂住时，await 会永远不返回，
   // 面板就停在空白。这里最多等 3 秒，拿不到就先按默认设置渲染。
-  const DEFAULTS = { anim: true, compat: false, gpu: true, showIcon: true, music: false, wallpaper: false, wallpaperPort: 8790, wallpaperToken: '', toolRows: 8, agentRows: 8, title: '' }
+  const DEFAULTS = { anim: true, compat: false, gpu: true, showIcon: true, wallpaper: false, wallpaperPort: 8790, wallpaperToken: '', toolRows: 8, agentRows: 8, title: '' }
   const settings = await Promise.race([
     ctx.rpc.call('get-settings').catch(() => null),
     new Promise((resolve) => setTimeout(() => resolve(null), 3000))
@@ -44,7 +44,6 @@ export async function mount(root, ctx) {
   const toolRows = clampInt(settings && settings.toolRows, 3, 15, 8)
   const agentRows = clampInt(settings && settings.agentRows, 3, 12, 8)
   const title = (settings && typeof settings.title === 'string') ? settings.title.trim() : ''
-  const music = !!(settings && settings.music)
 
   const style = document.createElement('style')
   style.textContent = `
@@ -70,8 +69,6 @@ export async function mount(root, ctx) {
 
   root.classList.add('hl-root')
   root.innerHTML = parsed.body.innerHTML
-  // BGM 模块启动时读取 localStorage；shim 会在它之前用这里的状态写入开关
-  window.__hlSettings = { music }
 
   // ---- 实时会话连接：放在页面端，使用当前查看者的身份与权限 ----
   const live = new Map()          // sessionId -> { agent, profile, title, reasoning, text, ts, working, ... }
@@ -439,15 +436,6 @@ export async function mount(root, ctx) {
     window.__hlApplySettings({ anim, compat, gpu, toolRows, agentRows })
   }
 
-  // 音乐：脚本执行完后按插件设置同步一次。官方修复了 iframe 自动播放后，
-  // 这里通常可以直接出声；若仍被浏览器拦截，模块会在首次点击页面时重试。
-  try {
-    if (window.__bgm) {
-      if (typeof window.__bgm.setVol === 'function') window.__bgm.setVol(60)
-      if (typeof window.__bgm.set === 'function') window.__bgm.set(music)
-    }
-  } catch (_) { /* ignore */ }
-
   refreshRate()
   const rateTimer = setInterval(refreshRate, 2500)
 
@@ -486,13 +474,13 @@ function mountSettings(root, ctx) {
         style="flex:1;min-width:280px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.2)">
     </label>
     <label><input type="checkbox" id="hls-show-icon"> 在 Studio 侧栏显示插件图标（默认开启；关闭后入口会隐藏）</label>
-    <label><input type="checkbox" id="hls-music"> 启用背景音乐</label>
     <label><input type="checkbox" id="hls-wallpaper"> 启用壁纸服务</label>
     <label>壁纸端口
       <input id="hls-wallpaper-port" type="number" min="1024" max="65535" step="1" value="8790">
     </label>
     <label>访问密钥
       <input id="hls-wallpaper-token" type="text" maxlength="128" style="flex:1;min-width:220px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.2)">
+      <button type="button" id="hls-wallpaper-random">随机</button>
     </label>
     <div class="muted">壁纸地址：<span id="hls-wallpaper-url">http://127.0.0.1:8790/</span></div>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式，默认开启）</label>
@@ -518,19 +506,32 @@ function mountSettings(root, ctx) {
   `
   root.append(wrap)
   const showIconBox = wrap.querySelector('#hls-show-icon')
-  const musicBox = wrap.querySelector('#hls-music')
   const wallpaperBox = wrap.querySelector('#hls-wallpaper')
   const wallpaperPortBox = wrap.querySelector('#hls-wallpaper-port')
   const wallpaperTokenBox = wrap.querySelector('#hls-wallpaper-token')
   const wallpaperUrl = wrap.querySelector('#hls-wallpaper-url')
+  const accessHost = () => {
+    try {
+      if (location.ancestorOrigins && location.ancestorOrigins.length) {
+        return new URL(location.ancestorOrigins[0]).hostname
+      }
+    } catch (_) { /* ignore */ }
+    return (location && location.hostname) || '127.0.0.1'
+  }
   const updateWallpaperUrl = () => {
     const port = clampInt(wallpaperPortBox.value, 1024, 65535, 8790)
-    const host = (location && location.hostname) || '127.0.0.1'
+    const host = accessHost()
     const token = wallpaperTokenBox.value.trim()
     wallpaperUrl.textContent = 'http://' + host + ':' + port + '/' + (token ? '?k=' + encodeURIComponent(token) : '')
   }
   wallpaperPortBox.addEventListener('input', updateWallpaperUrl)
   wallpaperTokenBox.addEventListener('input', updateWallpaperUrl)
+  wrap.querySelector('#hls-wallpaper-random').onclick = () => {
+    const bytes = new Uint8Array(16)
+    crypto.getRandomValues(bytes)
+    wallpaperTokenBox.value = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+    updateWallpaperUrl()
+  }
   const animBox = wrap.querySelector('#hls-anim')
   const gpuBox = wrap.querySelector('#hls-gpu')
   const compatBox = wrap.querySelector('#hls-compat')
@@ -540,7 +541,6 @@ function mountSettings(root, ctx) {
   const msg = wrap.querySelector('#hls-msg')
   ctx.rpc.call('get-settings').then((s) => {
     showIconBox.checked = !(s && s.showIcon === false)
-    musicBox.checked = !!(s && s.music)
     wallpaperBox.checked = !!(s && s.wallpaper)
     wallpaperPortBox.value = String(clampInt(s && s.wallpaperPort, 1024, 65535, 8790))
     wallpaperTokenBox.value = (s && typeof s.wallpaperToken === 'string') ? s.wallpaperToken : ''
@@ -552,14 +552,13 @@ function mountSettings(root, ctx) {
     agentRowsBox.value = String(clampInt(s && s.agentRows, 3, MAX_AGENT_ROWS, 8))
     titleInput.value = (s && s.title) || ''
   }).catch(() => {
-    showIconBox.checked = true; musicBox.checked = false; wallpaperBox.checked = false
+    showIconBox.checked = true; wallpaperBox.checked = false
     animBox.checked = true; gpuBox.checked = true; updateWallpaperUrl()
   })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
       const saved = await ctx.rpc.call('save-settings', {
         showIcon: !!showIconBox.checked,
-        music: !!musicBox.checked,
         wallpaper: !!wallpaperBox.checked,
         wallpaperPort: clampInt(wallpaperPortBox.value, 1024, 65535, 8790),
         wallpaperToken: wallpaperTokenBox.value.trim(),
