@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { readFileSync, writeFileSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { assertContracts, registerRpc } from './sdk/harness/contracts.mjs'
@@ -7,7 +8,7 @@ import { buildLegacyStats } from './src/legacy.mjs'
 import { startWallpaperServer } from './src/wallpaper-server.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.26'
+const VERSION = '0.8.27'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -56,8 +57,22 @@ export function apply(ctx) {
 
   let wallpaper = null
   let wallpaperPort = 0
+  let wallpaperToken = ''
+  let wallpaperTokenCurrent = ''
   let wallpaperBusy = null
   let wallpaperError = ''
+
+  const makeToken = () => randomBytes(16).toString('hex')
+  // 首次安装随机生成访问密钥并持久化到插件共享状态
+  const wallpaperConfigReady = (async () => {
+    let cfg = null
+    try { cfg = await ctx.state.plugin.get('wallpaper') } catch (_) { cfg = null }
+    if (!cfg || typeof cfg !== 'object') cfg = {}
+    if (typeof cfg.token !== 'string' || !cfg.token) cfg.token = makeToken()
+    wallpaperToken = cfg.token
+    try { await ctx.state.plugin.set('wallpaper', cfg) } catch (_) { /* ignore */ }
+    return cfg
+  })()
 
   function wallpaperRun() {
     // 壁纸服务没有 Studio 页面身份，使用插件激活身份（管理员），只读。
@@ -73,27 +88,33 @@ export function apply(ctx) {
     const current = wallpaper
     wallpaper = null
     wallpaperPort = 0
+    wallpaperTokenCurrent = ''
     try { await current.close() } catch (_) { /* ignore */ }
   }
 
   async function ensureWallpaper(settings) {
+    await wallpaperConfigReady
     const want = !!settings.wallpaper
     const port = clampInt(settings.wallpaperPort, 1024, 65535, WALLPAPER_PORT_DEFAULT)
+    const token = (typeof settings.wallpaperToken === 'string' && settings.wallpaperToken.trim()) || wallpaperToken
     if (!want) {
       await stopWallpaper()
       wallpaperError = ''
       return false
     }
-    if (wallpaper && wallpaperPort === port) return true
+    if (wallpaper && wallpaperPort === port && wallpaperTokenCurrent === token) return true
     if (wallpaperBusy) { try { await wallpaperBusy } catch (_) { /* ignore */ } }
     wallpaperBusy = (async () => {
       await stopWallpaper()
       try {
         wallpaper = await startWallpaperServer({
           port,
+          token,
           getStats: () => buildStats(wallpaperRun())
         })
         wallpaperPort = port
+        wallpaperTokenCurrent = token
+        wallpaperToken = token
         wallpaperError = ''
         ctx.log.info('wallpaper server listening on ' + wallpaper.url)
         return true
@@ -251,8 +272,8 @@ export function apply(ctx) {
   })
 
   // Studio 重启后不需要先打开设置页：按最后一次保存的全局配置自动拉起壁纸服务
-  ctx.state.plugin.get('wallpaper').then((cfg) => {
-    if (cfg && cfg.enabled) return ensureWallpaper({ wallpaper: true, wallpaperPort: cfg.port })
+  wallpaperConfigReady.then((cfg) => {
+    if (cfg && cfg.enabled) return ensureWallpaper({ wallpaper: true, wallpaperPort: cfg.port, wallpaperToken: cfg.token })
   }).catch(() => { /* ignore */ })
 
   metrics.sample()
@@ -340,7 +361,9 @@ export function apply(ctx) {
 
   registerRpc(ctx, contract, 'get-settings', async (_input, run) => {
     const saved = await readSettings(run)
-    await ensureWallpaper(saved)
+    await wallpaperConfigReady
+    await ensureWallpaper({ ...saved, wallpaperToken })
+
     return {
       anim: saved.anim !== false,
       compat: !!saved.compat,
@@ -349,6 +372,7 @@ export function apply(ctx) {
       music: !!saved.music,
       wallpaper: !!saved.wallpaper,
       wallpaperPort: clampInt(saved.wallpaperPort, 1024, 65535, WALLPAPER_PORT_DEFAULT),
+      wallpaperToken: wallpaperToken,
       toolRows: clampInt(saved.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(saved.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : ''
@@ -356,7 +380,10 @@ export function apply(ctx) {
   })
 
   registerRpc(ctx, contract, 'save-settings', async (input, run) => {
+    await wallpaperConfigReady
     const showIcon = input.showIcon !== false
+    const token = (typeof input.wallpaperToken === 'string' && input.wallpaperToken.trim()) || makeToken()
+    wallpaperToken = token
     const savedSettings = {
       anim: input.anim !== false,
       compat: !!input.compat,
@@ -365,13 +392,18 @@ export function apply(ctx) {
       music: !!input.music,
       wallpaper: !!input.wallpaper,
       wallpaperPort: clampInt(input.wallpaperPort, 1024, 65535, WALLPAPER_PORT_DEFAULT),
+      wallpaperToken: token,
       toolRows: clampInt(input.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(input.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : ''
     }
     await run.state.user.namespace('haloflux').set('settings', savedSettings)
     try {
-      await ctx.state.plugin.set('wallpaper', { enabled: savedSettings.wallpaper, port: savedSettings.wallpaperPort })
+      await ctx.state.plugin.set('wallpaper', {
+        enabled: savedSettings.wallpaper,
+        port: savedSettings.wallpaperPort,
+        token
+      })
     } catch (_) { /* 共享状态不可用时不阻断保存 */ }
     await ensureWallpaper(savedSettings)
     let navSynced = false
@@ -380,7 +412,7 @@ export function apply(ctx) {
     } catch (error) {
       ctx.log.warn('navigation sync failed: ' + String((error && error.message) || error))
     }
-    return { ok: true, navSynced, wallpaperError }
+    return { ok: true, navSynced, wallpaperError, wallpaperToken }
   })
 
   registerRpc(ctx, contract, 'ensure-navigation', async (_input, run) => {

@@ -63,6 +63,12 @@
           "description": "壁纸服务端口；默认 8790，范围 1024–65535。",
           "minimum": 1024,
           "maximum": 65535
+        },
+        "wallpaperToken": {
+          "type": "string",
+          "description": "壁纸服务访问密钥；首次安装随机生成，可在设置中修改。",
+          "minLength": 1,
+          "maxLength": 128
         }
       },
       "required": [
@@ -75,7 +81,8 @@
         "toolRows",
         "music",
         "wallpaper",
-        "wallpaperPort"
+        "wallpaperPort",
+        "wallpaperToken"
       ],
       "additionalProperties": false
     },
@@ -97,12 +104,18 @@
         "wallpaperError": {
           "type": "string",
           "description": "壁纸服务启动失败原因；空字符串表示正常。"
+        },
+        "wallpaperToken": {
+          "type": "string",
+          "description": "保存后的访问密钥；空输入时会重新生成。",
+          "minLength": 1
         }
       },
       "required": [
         "navSynced",
         "ok",
-        "wallpaperError"
+        "wallpaperError",
+        "wallpaperToken"
       ],
       "additionalProperties": false
     },

@@ -24,7 +24,7 @@ function pluginStats() {
   store.upsertSessions([
     { id: 's1', profile: 'default', agent: 'claude', last_active: now, message_count: 5 }
   ])
-  return buildLegacyStats(store.snapshot(null), {}, '0.8.26')
+  return buildLegacyStats(store.snapshot(null), {}, '0.8.27')
 }
 
 test('插件原始 /stats 会让舞台冻结（回归基线）', () => {

@@ -35,7 +35,7 @@ export async function mount(root, ctx) {
 
   // 宿主侧 RPC 没有超时：通道没建立或请求挂住时，await 会永远不返回，
   // 面板就停在空白。这里最多等 3 秒，拿不到就先按默认设置渲染。
-  const DEFAULTS = { anim: true, compat: false, gpu: true, showIcon: true, music: false, wallpaper: false, wallpaperPort: 8790, toolRows: 8, agentRows: 8, title: '' }
+  const DEFAULTS = { anim: true, compat: false, gpu: true, showIcon: true, music: false, wallpaper: false, wallpaperPort: 8790, wallpaperToken: '', toolRows: 8, agentRows: 8, title: '' }
   const settings = await Promise.race([
     ctx.rpc.call('get-settings').catch(() => null),
     new Promise((resolve) => setTimeout(() => resolve(null), 3000))
@@ -493,6 +493,9 @@ function mountSettings(root, ctx) {
     <label>壁纸端口
       <input id="hls-wallpaper-port" type="number" min="1024" max="65535" step="1" value="8790">
     </label>
+    <label>访问密钥
+      <input id="hls-wallpaper-token" type="text" maxlength="128" style="flex:1;min-width:220px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.2)">
+    </label>
     <div class="muted">壁纸地址：<span id="hls-wallpaper-url">http://127.0.0.1:8790/</span></div>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式，默认开启）</label>
     <label><input type="checkbox" id="hls-gpu"> 显示显卡（GPU 曲线与显存，默认开启；未检测到显卡时不显示）</label>
@@ -520,12 +523,16 @@ function mountSettings(root, ctx) {
   const musicBox = wrap.querySelector('#hls-music')
   const wallpaperBox = wrap.querySelector('#hls-wallpaper')
   const wallpaperPortBox = wrap.querySelector('#hls-wallpaper-port')
+  const wallpaperTokenBox = wrap.querySelector('#hls-wallpaper-token')
   const wallpaperUrl = wrap.querySelector('#hls-wallpaper-url')
   const updateWallpaperUrl = () => {
     const port = clampInt(wallpaperPortBox.value, 1024, 65535, 8790)
-    wallpaperUrl.textContent = 'http://127.0.0.1:' + port + '/'
+    const host = (location && location.hostname) || '127.0.0.1'
+    const token = wallpaperTokenBox.value.trim()
+    wallpaperUrl.textContent = 'http://' + host + ':' + port + '/' + (token ? '?k=' + encodeURIComponent(token) : '')
   }
   wallpaperPortBox.addEventListener('input', updateWallpaperUrl)
+  wallpaperTokenBox.addEventListener('input', updateWallpaperUrl)
   const animBox = wrap.querySelector('#hls-anim')
   const gpuBox = wrap.querySelector('#hls-gpu')
   const compatBox = wrap.querySelector('#hls-compat')
@@ -538,6 +545,7 @@ function mountSettings(root, ctx) {
     musicBox.checked = !!(s && s.music)
     wallpaperBox.checked = !!(s && s.wallpaper)
     wallpaperPortBox.value = String(clampInt(s && s.wallpaperPort, 1024, 65535, 8790))
+    wallpaperTokenBox.value = (s && typeof s.wallpaperToken === 'string') ? s.wallpaperToken : ''
     updateWallpaperUrl()
     animBox.checked = !(s && s.anim === false)
     gpuBox.checked = !(s && s.gpu === false)
@@ -556,6 +564,7 @@ function mountSettings(root, ctx) {
         music: !!musicBox.checked,
         wallpaper: !!wallpaperBox.checked,
         wallpaperPort: clampInt(wallpaperPortBox.value, 1024, 65535, 8790),
+        wallpaperToken: wallpaperTokenBox.value.trim(),
         anim: !!animBox.checked,
         gpu: !!gpuBox.checked,
         compat: !!compatBox.checked,
@@ -563,6 +572,10 @@ function mountSettings(root, ctx) {
         agentRows: clampInt(agentRowsBox.value, 3, MAX_AGENT_ROWS, 8),
         title: titleInput.value.trim()
       })
+      if (saved && typeof saved.wallpaperToken === 'string' && saved.wallpaperToken !== wallpaperTokenBox.value) {
+        wallpaperTokenBox.value = saved.wallpaperToken
+        updateWallpaperUrl()
+      }
       if (saved && saved.wallpaperError) msg.textContent = '壁纸服务：' + saved.wallpaperError
       else if (saved && saved.navSynced === false) msg.textContent = '设置已保存，但 Studio 拒绝修改侧栏入口；可到 Studio 导航设置里手动调整'
       else msg.textContent = '已保存，重新打开看板生效'
