@@ -5,9 +5,10 @@ import { assertContracts, validateModel } from '../sdk/harness/contracts.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('../contracts/plugin.json', import.meta.url), 'utf8')))
 
-test('settings model requires the eight declared fields', () => {
+test('settings model requires the ten declared fields', () => {
   const value = {
     anim: true, compat: false, gpu: true, showIcon: true, music: false,
+    wallpaper: false, wallpaperPort: 8790,
     toolRows: 8, agentRows: 8, title: 'HALOFLUX ON Ekko'
   }
   assert.deepEqual(validateModel(contract, 'settings', value), value)

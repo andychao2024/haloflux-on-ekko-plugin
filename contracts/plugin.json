@@ -53,6 +53,16 @@
         "music": {
           "type": "boolean",
           "description": "启用背景音乐；默认 false。开启后第一次点击页面开始播放。"
+        },
+        "wallpaper": {
+          "type": "boolean",
+          "description": "启用独立端口的壁纸服务；默认 false。"
+        },
+        "wallpaperPort": {
+          "type": "integer",
+          "description": "壁纸服务端口；默认 8790，范围 1024–65535。",
+          "minimum": 1024,
+          "maximum": 65535
         }
       },
       "required": [
@@ -63,7 +73,9 @@
         "showIcon",
         "title",
         "toolRows",
-        "music"
+        "music",
+        "wallpaper",
+        "wallpaperPort"
       ],
       "additionalProperties": false
     },
@@ -81,11 +93,16 @@
         "navSynced": {
           "type": "boolean",
           "description": "侧栏入口是否已同步为当前开关状态；宿主拒绝导航写入时为 false。"
+        },
+        "wallpaperError": {
+          "type": "string",
+          "description": "壁纸服务启动失败原因；空字符串表示正常。"
         }
       },
       "required": [
         "navSynced",
-        "ok"
+        "ok",
+        "wallpaperError"
       ],
       "additionalProperties": false
     },

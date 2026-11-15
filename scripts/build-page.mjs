@@ -176,10 +176,8 @@ out = out.replace(/<title>[^<]*<\/title>/, '<title>HALOFLUX ON Ekko</title>')
 
 out = out.replace('</head>', `<style>
 /* 插件内只做最小改动，其余布局/动效/卡片尺寸与 docker 版完全一致：
-   1. 背景色对齐页面自身 --bg
-   2. 右上角控制条隐藏（背景音乐在插件设置页开关） */
+   背景色对齐页面自身 --bg；右上角音乐开关保留（与 docker 版一致） */
 html,body{background:#08090b !important}
-#aix-topbar{display:none !important}
 </style></head>`)
 
 if (out === html) throw new Error('未找到 wp.js / ai-link.js 脚本标签，结构可能已变')

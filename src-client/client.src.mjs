@@ -33,7 +33,7 @@ export async function mount(root, ctx) {
 
   // 宿主侧 RPC 没有超时：通道没建立或请求挂住时，await 会永远不返回，
   // 面板就停在空白。这里最多等 3 秒，拿不到就先按默认设置渲染。
-  const DEFAULTS = { anim: true, compat: false, gpu: true, showIcon: true, music: false, toolRows: 8, agentRows: 8, title: '' }
+  const DEFAULTS = { anim: true, compat: false, gpu: true, showIcon: true, music: false, wallpaper: false, wallpaperPort: 8790, toolRows: 8, agentRows: 8, title: '' }
   const settings = await Promise.race([
     ctx.rpc.call('get-settings').catch(() => null),
     new Promise((resolve) => setTimeout(() => resolve(null), 3000))
@@ -486,7 +486,12 @@ function mountSettings(root, ctx) {
         style="flex:1;min-width:280px;padding:4px 8px;border-radius:6px;background:rgba(255,255,255,.06);color:inherit;border:1px solid rgba(255,255,255,.2)">
     </label>
     <label><input type="checkbox" id="hls-show-icon"> 在 Studio 侧栏显示插件图标（默认开启；关闭后入口会隐藏）</label>
-    <label><input type="checkbox" id="hls-music"> 启用背景音乐（官方已修复 iframe 播放；首次点击页面后播放）</label>
+    <label><input type="checkbox" id="hls-music"> 启用背景音乐</label>
+    <label><input type="checkbox" id="hls-wallpaper"> 启用壁纸服务</label>
+    <label>壁纸端口
+      <input id="hls-wallpaper-port" type="number" min="1024" max="65535" step="1" value="8790">
+    </label>
+    <div class="muted">壁纸地址：<span id="hls-wallpaper-url">http://127.0.0.1:8790/</span></div>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式，默认开启）</label>
     <label><input type="checkbox" id="hls-gpu"> 显示显卡（GPU 曲线与显存，默认开启；未检测到显卡时不显示）</label>
     <label>工具调用显示条数
@@ -511,6 +516,14 @@ function mountSettings(root, ctx) {
   root.append(wrap)
   const showIconBox = wrap.querySelector('#hls-show-icon')
   const musicBox = wrap.querySelector('#hls-music')
+  const wallpaperBox = wrap.querySelector('#hls-wallpaper')
+  const wallpaperPortBox = wrap.querySelector('#hls-wallpaper-port')
+  const wallpaperUrl = wrap.querySelector('#hls-wallpaper-url')
+  const updateWallpaperUrl = () => {
+    const port = clampInt(wallpaperPortBox.value, 1024, 65535, 8790)
+    wallpaperUrl.textContent = 'http://127.0.0.1:' + port + '/'
+  }
+  wallpaperPortBox.addEventListener('input', updateWallpaperUrl)
   const animBox = wrap.querySelector('#hls-anim')
   const gpuBox = wrap.querySelector('#hls-gpu')
   const compatBox = wrap.querySelector('#hls-compat')
@@ -521,18 +534,26 @@ function mountSettings(root, ctx) {
   ctx.rpc.call('get-settings').then((s) => {
     showIconBox.checked = !(s && s.showIcon === false)
     musicBox.checked = !!(s && s.music)
+    wallpaperBox.checked = !!(s && s.wallpaper)
+    wallpaperPortBox.value = String(clampInt(s && s.wallpaperPort, 1024, 65535, 8790))
+    updateWallpaperUrl()
     animBox.checked = !(s && s.anim === false)
     gpuBox.checked = !(s && s.gpu === false)
     compatBox.checked = !!(s && s.compat)
     toolRowsBox.value = String(clampInt(s && s.toolRows, 3, MAX_TOOL_ROWS, 8))
     agentRowsBox.value = String(clampInt(s && s.agentRows, 3, MAX_AGENT_ROWS, 8))
     titleInput.value = (s && s.title) || ''
-  }).catch(() => { showIconBox.checked = true; musicBox.checked = false; animBox.checked = true; gpuBox.checked = true })
+  }).catch(() => {
+    showIconBox.checked = true; musicBox.checked = false; wallpaperBox.checked = false
+    animBox.checked = true; gpuBox.checked = true; updateWallpaperUrl()
+  })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
       const saved = await ctx.rpc.call('save-settings', {
         showIcon: !!showIconBox.checked,
         music: !!musicBox.checked,
+        wallpaper: !!wallpaperBox.checked,
+        wallpaperPort: clampInt(wallpaperPortBox.value, 1024, 65535, 8790),
         anim: !!animBox.checked,
         gpu: !!gpuBox.checked,
         compat: !!compatBox.checked,
@@ -540,9 +561,9 @@ function mountSettings(root, ctx) {
         agentRows: clampInt(agentRowsBox.value, 3, MAX_AGENT_ROWS, 8),
         title: titleInput.value.trim()
       })
-      msg.textContent = saved && saved.navSynced === false
-        ? '设置已保存，但 Studio 拒绝修改侧栏入口；可到 Studio 导航设置里手动调整'
-        : '已保存，重新打开看板生效'
+      if (saved && saved.wallpaperError) msg.textContent = '壁纸服务：' + saved.wallpaperError
+      else if (saved && saved.navSynced === false) msg.textContent = '设置已保存，但 Studio 拒绝修改侧栏入口；可到 Studio 导航设置里手动调整'
+      else msg.textContent = '已保存，重新打开看板生效'
     } catch (error) {
       msg.textContent = '保存失败：' + (error.message || error)
     }

@@ -4,9 +4,10 @@ import { assertContracts, registerRpc } from './sdk/harness/contracts.mjs'
 import { createStore } from './src/store.mjs'
 import { createMetrics } from './src/metrics.mjs'
 import { buildLegacyStats } from './src/legacy.mjs'
+import { startWallpaperServer } from './src/wallpaper-server.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.8.25'
+const VERSION = '0.8.26'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -29,6 +30,8 @@ const AGENT_ROWS_DEFAULT = 8
 const AGENT_ROWS_MIN = 3
 const AGENT_ROWS_MAX = 12
 
+const WALLPAPER_PORT_DEFAULT = 8790
+
 // Studio 侧栏里的插件入口由用户导航配置控制；插件设置只负责增删这一项。
 const NAV_ITEM = 'plugin:haloflux-ai-link/dashboard'
 
@@ -50,6 +53,60 @@ export function apply(ctx) {
   let lastSkillTry = 0
   let lastRateTry = 0
   const roleCache = new Map()
+
+  let wallpaper = null
+  let wallpaperPort = 0
+  let wallpaperBusy = null
+  let wallpaperError = ''
+
+  function wallpaperRun() {
+    // 壁纸服务没有 Studio 页面身份，使用插件激活身份（管理员），只读。
+    return {
+      identity: { userId: ctx.identity.userId, profile: ctx.identity.profile },
+      host: ctx.host,
+      signal: new AbortController().signal
+    }
+  }
+
+  async function stopWallpaper() {
+    if (!wallpaper) return
+    const current = wallpaper
+    wallpaper = null
+    wallpaperPort = 0
+    try { await current.close() } catch (_) { /* ignore */ }
+  }
+
+  async function ensureWallpaper(settings) {
+    const want = !!settings.wallpaper
+    const port = clampInt(settings.wallpaperPort, 1024, 65535, WALLPAPER_PORT_DEFAULT)
+    if (!want) {
+      await stopWallpaper()
+      wallpaperError = ''
+      return false
+    }
+    if (wallpaper && wallpaperPort === port) return true
+    if (wallpaperBusy) { try { await wallpaperBusy } catch (_) { /* ignore */ } }
+    wallpaperBusy = (async () => {
+      await stopWallpaper()
+      try {
+        wallpaper = await startWallpaperServer({
+          port,
+          getStats: () => buildStats(wallpaperRun())
+        })
+        wallpaperPort = port
+        wallpaperError = ''
+        ctx.log.info('wallpaper server listening on ' + wallpaper.url)
+        return true
+      } catch (error) {
+        wallpaper = null
+        wallpaperPort = 0
+        wallpaperError = String((error && error.message) || error)
+        ctx.log.warn('wallpaper server failed: ' + wallpaperError)
+        return false
+      }
+    })()
+    try { return await wallpaperBusy } finally { wallpaperBusy = null }
+  }
 
   async function readSettings(run) {
     return (await run.state.user.namespace('haloflux').get('settings')) || {}
@@ -190,7 +247,13 @@ export function apply(ctx) {
 
   ctx.lifecycle.add(() => {
     clearInterval(metricTimer)
+    stopWallpaper()
   })
+
+  // Studio 重启后不需要先打开设置页：按最后一次保存的全局配置自动拉起壁纸服务
+  ctx.state.plugin.get('wallpaper').then((cfg) => {
+    if (cfg && cfg.enabled) return ensureWallpaper({ wallpaper: true, wallpaperPort: cfg.port })
+  }).catch(() => { /* ignore */ })
 
   metrics.sample()
 
@@ -236,7 +299,7 @@ export function apply(ctx) {
     return snap
   })
 
-  registerRpc(ctx, contract, 'stats', async (_input, run) => {
+  async function buildStats(run) {
     lastViewerAt = now()
     const role = roleCache.has(run.identity.userId) ? roleOf(run) : null
     if (!roleCache.has(run.identity.userId)) roleOf(run).catch(() => {})
@@ -260,7 +323,9 @@ export function apply(ctx) {
       }
     }
     return buildLegacyStats(snap, metrics.state, VERSION)
-  })
+  }
+
+  registerRpc(ctx, contract, 'stats', async (_input, run) => buildStats(run))
 
   registerRpc(ctx, contract, 'rate', async (_input, run) => {
     lastViewerAt = now()
@@ -275,12 +340,15 @@ export function apply(ctx) {
 
   registerRpc(ctx, contract, 'get-settings', async (_input, run) => {
     const saved = await readSettings(run)
+    await ensureWallpaper(saved)
     return {
       anim: saved.anim !== false,
       compat: !!saved.compat,
       gpu: saved.gpu !== false,
       showIcon: saved.showIcon !== false,
       music: !!saved.music,
+      wallpaper: !!saved.wallpaper,
+      wallpaperPort: clampInt(saved.wallpaperPort, 1024, 65535, WALLPAPER_PORT_DEFAULT),
       toolRows: clampInt(saved.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(saved.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : ''
@@ -289,23 +357,30 @@ export function apply(ctx) {
 
   registerRpc(ctx, contract, 'save-settings', async (input, run) => {
     const showIcon = input.showIcon !== false
-    await run.state.user.namespace('haloflux').set('settings', {
+    const savedSettings = {
       anim: input.anim !== false,
       compat: !!input.compat,
       gpu: input.gpu !== false,
       showIcon,
       music: !!input.music,
+      wallpaper: !!input.wallpaper,
+      wallpaperPort: clampInt(input.wallpaperPort, 1024, 65535, WALLPAPER_PORT_DEFAULT),
       toolRows: clampInt(input.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(input.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : ''
-    })
+    }
+    await run.state.user.namespace('haloflux').set('settings', savedSettings)
+    try {
+      await ctx.state.plugin.set('wallpaper', { enabled: savedSettings.wallpaper, port: savedSettings.wallpaperPort })
+    } catch (_) { /* 共享状态不可用时不阻断保存 */ }
+    await ensureWallpaper(savedSettings)
     let navSynced = false
     try {
       navSynced = await syncNavigation(run, showIcon)
     } catch (error) {
       ctx.log.warn('navigation sync failed: ' + String((error && error.message) || error))
     }
-    return { ok: true, navSynced }
+    return { ok: true, navSynced, wallpaperError }
   })
 
   registerRpc(ctx, contract, 'ensure-navigation', async (_input, run) => {
