@@ -3,6 +3,8 @@
 把 [HALOFLUX](https://github.com/Ryder191/haloflux) 的动效看板接入 Ekko Studio：
 原版舞台（圆环 / 光束 / 扫描线）+ HUD + 8 个数据面板，数据全部来自 Studio 公开接口。
 
+> **推荐玩法**：[把看板用作桌面壁纸 / 屏保](docs/WALLPAPER.md)
+
 ## 功能
 
 - 原版 canvas 舞台与动效，按令牌吞吐驱动圆环转速、节拍与脉冲
