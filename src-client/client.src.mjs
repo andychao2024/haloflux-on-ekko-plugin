@@ -386,13 +386,29 @@ export async function mount(root, ctx) {
       if (slot.working && slot.ts && Date.now() - slot.ts > 10 * 60 * 1000) slot.working = false
       if (slot.working) workingAgents.add(slot.agent)
     }
-    for (const rec of pendingSessions.values()) {
-      if (rec.working && Date.now() - rec.at < 5 * 60 * 1000) workingAgents.add(rec.agent)
+    const nowSec = Math.floor(Date.now() / 1000)
+    const recentWorkIds = new Set()
+    for (const meta of (d.activeSessions || []).concat(d.recentSessions || [])) {
+      const last = Number(meta && meta.lastActive)
+      if (last > 0 && nowSec - (last > 1e12 ? Math.floor(last / 1000) : last) <= 600) {
+        recentWorkIds.add(meta.id)
+      }
     }
-    if (workingAgents.size && Array.isArray(ai.agents)) {
-      ai.agents = ai.agents.map((item) => workingAgents.has(item.agent)
-        ? Object.assign({}, item, { active: true, running: 1, activeSessions: item.sessions })
-        : item)
+    for (const [id, rec] of pendingSessions) {
+      if (rec.working && Date.now() - rec.at < 60 * 1000 && recentWorkIds.has(id)) {
+        workingAgents.add(rec.agent)
+      }
+    }
+    // 始终以实时/未完成会话重算 active，不能沿用服务器快照里的旧 active。
+    if (Array.isArray(ai.agents)) {
+      ai.agents = ai.agents.map((item) => {
+        const active = workingAgents.has(item.agent)
+        return Object.assign({}, item, {
+          active,
+          running: active ? 1 : 0,
+          activeSessions: active ? (item.activeSessions || item.sessions || 0) : 0
+        })
+      })
       ai.activeAgents = ai.agents.filter((item) => item.active).length
     }
     return d

@@ -12,7 +12,7 @@ import { applyMotionSignals } from './src/motion-signals.mjs'
 import { applyWallpaperActivity } from './src/wallpaper-activity.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.9.0'
+const VERSION = '0.9.11'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -111,7 +111,11 @@ export function apply(ctx) {
         const plans = Array.isArray(res && res.taskPlans) ? res.taskPlans : []
         if (plans[0]) store.setPlan(meta.id, plans[0])
         const at = now()
-        wallpaperPending.set(meta.id, { working: messagesWorking(messages), at, agent: meta.agent || 'unknown' })
+        const lastActive = Number(meta.lastActive) || 0
+        const lastActiveSec = lastActive > 1e12 ? lastActive / 1000 : lastActive
+        // 未完成回合只在会话最近 10 分钟有活动时才算运行，避免遗弃会话让舞台一直转。
+        const recent = lastActiveSec > 0 && at / 1000 - lastActiveSec <= 600
+        wallpaperPending.set(meta.id, { working: recent && messagesWorking(messages), at, agent: meta.agent || 'unknown' })
         const list = parseToolMessages(messages, 8, at).map((item) => ({
           profile: meta.profile || 'default',
           agent: meta.agent || 'unknown',
@@ -373,8 +377,16 @@ export function apply(ctx) {
     const snap = store.snapshot(profiles)
     const workingByAgent = new Map()
     const workingSessions = new Set()
+    const recentWorkIds = new Set((snap.recentSessions || [])
+      .filter((item) => {
+        const last = Number(item && item.lastActive)
+        const at = last > 1e12 ? last / 1000 : last
+        return at > 0 && now() / 1000 - at <= 600
+      })
+      .map((item) => item.id))
     for (const [id, rec] of wallpaperPending) {
       if (!rec || !rec.working || now() - rec.at >= 60000) continue
+      if (!recentWorkIds.has(id)) continue
       workingSessions.add(id)
       if (rec.agent) workingByAgent.set(rec.agent, (workingByAgent.get(rec.agent) || 0) + 1)
     }
@@ -382,6 +394,9 @@ export function apply(ctx) {
     if (snap.taskPlan && Array.isArray(snap.taskPlan.plans)) {
       for (const plan of snap.taskPlan.plans) {
         if (!workingSessions.has(plan.sessionId)) continue
+        // 只恢复最近 10 分钟内更新的计划；不要把历史已结束计划重新拉起来。
+        const age = typeof plan.ageSec === 'number' ? plan.ageSec : null
+        if (plan.state !== 'running' && (age === null || age > 600)) continue
         plan.state = 'running'
         plan.sessionActive = true
       }
@@ -437,6 +452,9 @@ export function apply(ctx) {
     if (snap.taskPlan && Array.isArray(snap.taskPlan.plans)) {
       for (const plan of snap.taskPlan.plans) {
         if (!workingSessions.has(plan.sessionId)) continue
+        // 只恢复最近 10 分钟内更新的计划；不要把历史已结束计划重新拉起来。
+        const age = typeof plan.ageSec === 'number' ? plan.ageSec : null
+        if (plan.state !== 'running' && (age === null || age > 600)) continue
         plan.state = 'running'
         plan.sessionActive = true
       }
@@ -453,18 +471,16 @@ export function apply(ctx) {
       }
     }
     const stats = buildLegacyStats(snap, metrics.state, VERSION)
-    if (workingByAgent.size) {
-      let activeAgents = 0
-      for (const agent of stats.ai.agents) {
-        const count = workingByAgent.get(agent.agent)
-        if (!count) continue
-        agent.active = true
-        agent.running = 1
-        agent.activeSessions = count
-        activeAgents += 1
-      }
-      stats.ai.activeAgents = activeAgents
+    // 代理调度始终以本轮实时/未完成会话为准，避免快照里的旧 active 状态一直保留。
+    let activeAgents = 0
+    for (const agent of stats.ai.agents) {
+      const count = workingByAgent.get(agent.agent) || 0
+      agent.active = count > 0
+      agent.running = count > 0 ? 1 : 0
+      agent.activeSessions = count
+      if (count > 0) activeAgents += 1
     }
+    stats.ai.activeAgents = activeAgents
     // 与插件页共用同一套忙碌判定；只信历史轮询确认的未完成回合，
     // 不把可能卡在 working 的实时 slot 当作无限续命信号。
     applyMotionSignals(stats.ai, {

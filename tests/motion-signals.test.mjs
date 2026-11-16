@@ -177,3 +177,15 @@ test('壁纸页忽略卡在 working 的实时 slot，只认历史轮询', () => 
   assert.equal(d.ai.pendingSec, null)
   assert.equal(motionOf(d.ai).busy, false)
 })
+
+test('旧计划不会因为会话仍在 working 被重新激活', () => {
+  const d = pluginStats()
+  const now = Date.now()
+  d.ai.taskPlan = { plans: [{ state: 'running', ageSec: 800 }] }
+  applyMotionSignals(d.ai, {
+    now,
+    liveSlots: [{ working: true, ts: now - 1000 }]
+  })
+  assert.equal(d.ai.planActive, false)
+  assert.equal(motionOf(d.ai).busy, true) // 当前实时工作仍然算忙碌
+})

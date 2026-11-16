@@ -86,7 +86,8 @@ export function applyMotionSignals(ai, opts) {
   const running = plans.find((plan) => plan && plan.state === 'running')
   if (running) {
     const planAge = typeof running.ageSec === 'number' ? running.ageSec : null
-    const fresh = working || planAge === null || planAge <= SESSION_GRACE_SEC
+    const fresh = planAge === null || planAge <= SESSION_GRACE_SEC ||
+      (working && planAge <= 600)
     ai.planActive = fresh
     ai.planAgeSec = fresh ? (planAge === null ? ageSec : planAge) : null
   } else if (plans.length) {
