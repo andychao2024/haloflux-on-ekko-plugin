@@ -10,9 +10,10 @@ import { parseToolMessages } from './src/tool-history.mjs'
 import { messagesWorking } from './src/session-state.mjs'
 import { applyMotionSignals } from './src/motion-signals.mjs'
 import { applyWallpaperActivity } from './src/wallpaper-activity.mjs'
+import { createConnections } from './src/conn.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.9.11'
+const VERSION = '0.9.20'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -34,6 +35,9 @@ const TOOL_ROWS_MAX = 15
 const AGENT_ROWS_DEFAULT = 8
 const AGENT_ROWS_MIN = 3
 const AGENT_ROWS_MAX = 12
+const IDLE_SPIN_DEFAULT = 3
+const IDLE_SPIN_MIN = 2
+const IDLE_SPIN_MAX = 60
 
 const WALLPAPER_PORT_DEFAULT = 8790
 
@@ -50,6 +54,9 @@ export function apply(ctx) {
   const startedAt = now()
   const store = createStore()
   const metrics = createMetrics()
+  // 壁纸页没有 iframe 页面通道；由插件生命周期持有 sessions.connect，
+  // 把当前回合的思考/工具/计划写进共享 store。
+  const liveConn = createConnections({ host: ctx.host, store, log: ctx.log, max: 4 })
   const dumpDir = ctx.paths && ctx.paths.dataDir ? ctx.paths.dataDir : null
   let lastViewerAt = 0
   let usageBusy = false
@@ -96,13 +103,14 @@ export function apply(ctx) {
     wallpaperPort = 0
     wallpaperTokenCurrent = ''
     wallpaperDisplayKey = ''
+    try { await liveConn.closeAll() } catch (_) { /* ignore */ }
     try { await current.close() } catch (_) { /* ignore */ }
   }
 
   let liveToolAt = 0
 
   async function backfillWallpaperTools() {
-    const recent = store.snapshot(null).recentSessions.slice(0, 3)
+    const recent = store.snapshot(null).recentSessions.slice(0, 4)
     for (const meta of recent) {
       if (!meta || !meta.id) continue
       try {
@@ -151,6 +159,7 @@ export function apply(ctx) {
       gpu: settings.gpu !== false,
       toolRows: clampInt(settings.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(settings.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
+      idleSpinSec: clampInt(settings.idleSpinSec, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT),
       title: typeof settings.title === 'string' ? settings.title : ''
     }
   }
@@ -177,7 +186,7 @@ export function apply(ctx) {
           token,
           display,
           getStats: () => {
-            return buildStats(wallpaperRun()).catch((error) => {
+            return buildStats(wallpaperRun(), { live: true }).catch((error) => {
               ctx.log.warn('wallpaper stats failed: ' + String((error && error.message) || error))
               throw error
             })
@@ -343,6 +352,7 @@ export function apply(ctx) {
 
   ctx.lifecycle.add(() => {
     clearInterval(metricTimer)
+    void liveConn.closeAll()
     stopWallpaper()
   })
 
@@ -390,6 +400,13 @@ export function apply(ctx) {
       workingSessions.add(id)
       if (rec.agent) workingByAgent.set(rec.agent, (workingByAgent.get(rec.agent) || 0) + 1)
     }
+    // 历史消息暂时没标出“未完成”，但思考流刚刚更新时也说明 Agent 仍在工作。
+    for (const stream of snap.streams) {
+      if (!stream || !stream.agent || workingSessions.has(stream.sessionId)) continue
+      if (typeof stream.ageSec === 'number' && stream.ageSec <= 60) {
+        workingByAgent.set(stream.agent, Math.max(1, workingByAgent.get(stream.agent) || 0))
+      }
+    }
     applyWallpaperActivity(snap, workingSessions)
     if (snap.taskPlan && Array.isArray(snap.taskPlan.plans)) {
       for (const plan of snap.taskPlan.plans) {
@@ -424,7 +441,7 @@ export function apply(ctx) {
     return snap
   })
 
-  async function buildStats(run) {
+  async function buildStats(run, options = {}) {
     lastViewerAt = now()
     const role = roleCache.has(run.identity.userId) ? roleOf(run) : null
     if (!roleCache.has(run.identity.userId)) roleOf(run).catch(() => {})
@@ -441,12 +458,27 @@ export function apply(ctx) {
       try { await backfillWallpaperTools() } catch (_) { /* ignore */ }
     }
     const snap = store.snapshot(profiles)
-    const workingByAgent = new Map()
+    // 只有壁纸服务自己的 /stats 才维持后台实时连接；插件页的 stats RPC
+    // 已有页面端 live slot，不需要再重复订阅。
+    const useLive = options.live === true && !!wallpaper
+    if (useLive) liveConn.sync(snap.recentSessions.slice(0, 4))
+    const liveSlots = useLive ? liveConn.slots() : []
     const workingSessions = new Set()
+    const agentBySession = new Map()
     for (const [id, rec] of wallpaperPending) {
       if (!rec || !rec.working || now() - rec.at >= 60000) continue
       workingSessions.add(id)
-      if (rec.agent) workingByAgent.set(rec.agent, (workingByAgent.get(rec.agent) || 0) + 1)
+      if (rec.agent) agentBySession.set(id, rec.agent)
+    }
+    for (const slot of liveSlots) {
+      if (!slot || !slot.working) continue
+      workingSessions.add(slot.sessionId)
+      if (slot.agent) agentBySession.set(slot.sessionId, slot.agent)
+    }
+    const workingByAgent = new Map()
+    for (const id of workingSessions) {
+      const agent = agentBySession.get(id)
+      if (agent) workingByAgent.set(agent, (workingByAgent.get(agent) || 0) + 1)
     }
     applyWallpaperActivity(snap, workingSessions)
     if (snap.taskPlan && Array.isArray(snap.taskPlan.plans)) {
@@ -471,22 +503,27 @@ export function apply(ctx) {
       }
     }
     const stats = buildLegacyStats(snap, metrics.state, VERSION)
-    // 代理调度始终以本轮实时/未完成会话为准，避免快照里的旧 active 状态一直保留。
+    // 代理调度：有实时/未完成信号时以它为准；没有信号时保留最近 60 秒活动的 Agent，
+    // 避免后台数据暂时缺失时把整块面板全部清空。
     let activeAgents = 0
+    const nowSec = Math.floor(now() / 1000)
     for (const agent of stats.ai.agents) {
       const count = workingByAgent.get(agent.agent) || 0
-      agent.active = count > 0
-      agent.running = count > 0 ? 1 : 0
+      const raw = Number(agent.lastActive)
+      const last = raw > 1e12 ? Math.floor(raw / 1000) : raw
+      const recent = last > 0 && nowSec - last <= 60
+      agent.active = count > 0 || recent
+      agent.running = agent.active ? 1 : 0
       agent.activeSessions = count
-      if (count > 0) activeAgents += 1
+      if (agent.active) activeAgents += 1
     }
     stats.ai.activeAgents = activeAgents
-    // 与插件页共用同一套忙碌判定；只信历史轮询确认的未完成回合，
-    // 不把可能卡在 working 的实时 slot 当作无限续命信号。
+    // 与插件页共用同一套忙碌判定；壁纸端把后台实时 slot 一并交给它，
+    // 当前回合的思考/工具事件可以立即驱动动效。
     applyMotionSignals(stats.ai, {
       now: now(),
-      liveEvent: null,
-      liveSlots: [],
+      liveEvent: useLive ? liveConn.lastEvent() : null,
+      liveSlots,
       pendingSessions: wallpaperPending.values(),
       sessions: snap.recentSessions
     })
@@ -521,6 +558,7 @@ export function apply(ctx) {
       wallpaperToken: wallpaperToken,
       toolRows: clampInt(saved.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(saved.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
+      idleSpinSec: clampInt(saved.idleSpinSec, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT),
       title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : ''
     }
   })
@@ -548,6 +586,7 @@ export function apply(ctx) {
       wallpaperToken: token,
       toolRows: clampInt(input.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(input.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
+      idleSpinSec: clampInt(input.idleSpinSec, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT),
       title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : ''
     }
     await run.state.user.namespace('haloflux').set('settings', savedSettings)

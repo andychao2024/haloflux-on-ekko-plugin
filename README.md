@@ -32,7 +32,7 @@ https://<你的域名>:8443/?k=<访问密钥>
 
 推荐工具：
 
-- macOS 桌面：[Plash](https://github.com/sindresorhus/Plash)（Mac App Store 免费）+ 屏保：[WebViewScreenSaver](https://github.com/lwouis/WebViewScreenSaver)
+- macOS 桌面：[Plash](https://github.com/sindresorhus/Plash)（Mac App Store 免费）+ 屏保：[WebViewScreenSaver](https://github.com/liquidx/webviewscreensaver)
 - Windows：[Lively Wallpaper](https://github.com/rocksdanister/lively)
 
 完整玩法、URL 参数、纯净模式、屏保配置和常见问题见：
@@ -40,6 +40,8 @@ https://<你的域名>:8443/?k=<访问密钥>
 **[docs/WALLPAPER.md](docs/WALLPAPER.md)**
 
 ## 安装
+
+需要 **Ekko Studio 0.8.25 或更高版本**。
 
 打开 Ekko Studio 插件中心，搜索「HALOFLUX ON Ekko」，一键安装插件市场版。
 
@@ -52,6 +54,7 @@ https://<你的域名>:8443/?k=<访问密钥>
 - 显卡显示开关
 - 工具调用显示条数（3–15，默认 8）
 - 代理调度显示行数（3–12，默认 8）
+- 空闲圆环旋转间隔（2–60 秒，默认 3 秒）
 - 壁纸服务：启用 / 端口 / 访问密钥 / 访问者数量
 
 壁纸服务保存后会重启；已打开的壁纸页刷新一次即可生效。
@@ -96,10 +99,10 @@ https://<你的域名>:8443/?k=<访问密钥>
 ## 已知限制
 
 - 历史工具总数：公开接口没有聚合值，只保留最近工具和插件运行期间的计数
-- 思考回看：只补最近 3 个会话的最后一条，不做完整历史
+- 思考回看：只补最近 4 个会话的最后一条，不做完整历史
 - 技能“使用中”：接口只有 7 日聚合，没有单次调用时间
 - 非 Linux 平台：磁盘、网络、GPU 指标显示 `—`
-- 壁纸页可以独立打开；当前 Studio 版本下，实时会话/工具数据的后台刷新仍建议保持插件页打开，CPU / 内存 / 网络等本机指标不受影响
+- 壁纸页可以独立打开；壁纸服务会自动连接最近 4 个会话，当前回合的工具和思考不依赖插件页打开。超过 4 个活跃会话时，其余会话使用 10 秒历史回填
 - 归档会话不计入累计令牌与消息数
 
 ## 归属与许可

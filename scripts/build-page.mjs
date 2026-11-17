@@ -52,7 +52,7 @@ const shim = `
       try { Object.defineProperty(window, name, { value: memoryStore(), configurable: true }); } catch (_) {}
     }
   });
-  var settings = { anim: true, fps: 30, gpu: true, toolRows: 8, agentRows: 8 };
+  var settings = { anim: true, fps: 30, gpu: true, toolRows: 8, agentRows: 8, idleSpinSec: 3 };
   var seq = 0, pending = {};
   function rowLimit(value, lo, hi) {
     var n = Number(value);
@@ -65,6 +65,9 @@ const shim = `
     /* 工具调用/代理调度显示条数：同样每帧读取，保存后无需重载页面 */
     window.__hlToolRows = rowLimit(settings.toolRows, 3, 15);
     window.__hlAgentRows = rowLimit(settings.agentRows, 3, 12);
+    var idleSpin = Number(settings.idleSpinSec);
+    window.__hlIdleSpinSec = isFinite(idleSpin)
+      ? Math.max(2, Math.min(60, Math.round(idleSpin))) : 3;
     if (window.__stageSetFps) window.__stageSetFps(settings.fps === 60 ? 60 : 30);
     /* 关键：不要用 document.visibilityState 去暂停舞台。
        Studio 用 display:none 切换插件视图时，iframe 的 visibilitychange 并不

@@ -10,6 +10,9 @@
 // 与 server.mjs 的边界保持一致；页面端再夹一次，避免旧设置或手改数据越界。
 const MAX_TOOL_ROWS = 15
 const MAX_AGENT_ROWS = 12
+const IDLE_SPIN_MIN = 2
+const IDLE_SPIN_MAX = 60
+const IDLE_SPIN_DEFAULT = 3
 function clampInt(value, lo, hi, fallback) {
   const n = Number(value)
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : fallback
@@ -35,7 +38,7 @@ export async function mount(root, ctx) {
 
   // 宿主侧 RPC 没有超时：通道没建立或请求挂住时，await 会永远不返回，
   // 面板就停在空白。这里最多等 3 秒，拿不到就先按默认设置渲染。
-  const DEFAULTS = { anim: true, compat: false, gpu: true, showIcon: true, wallpaper: false, wallpaperPort: 8790, wallpaperToken: '', toolRows: 8, agentRows: 8, title: '' }
+  const DEFAULTS = { anim: true, compat: false, gpu: true, showIcon: true, wallpaper: false, wallpaperPort: 8790, wallpaperToken: '', toolRows: 8, agentRows: 8, idleSpinSec: 3, title: '' }
   const settings = await Promise.race([
     ctx.rpc.call('get-settings').catch(() => null),
     new Promise((resolve) => setTimeout(() => resolve(null), 3000))
@@ -45,6 +48,7 @@ export async function mount(root, ctx) {
   const gpu = !(settings && settings.gpu === false)
   const toolRows = clampInt(settings && settings.toolRows, 3, 15, 8)
   const agentRows = clampInt(settings && settings.agentRows, 3, 12, 8)
+  const idleSpinSec = clampInt(settings && settings.idleSpinSec, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT)
   const title = (settings && typeof settings.title === 'string') ? settings.title.trim() : ''
 
   const style = document.createElement('style')
@@ -399,14 +403,19 @@ export async function mount(root, ctx) {
         workingAgents.add(rec.agent)
       }
     }
-    // 始终以实时/未完成会话重算 active，不能沿用服务器快照里的旧 active。
+    // 有实时/未完成信号时以它为准；没有信号时保留最近 60 秒活动的 Agent，
+    // 避免后台数据暂时缺失时把整块面板全部清空。
     if (Array.isArray(ai.agents)) {
       ai.agents = ai.agents.map((item) => {
-        const active = workingAgents.has(item.agent)
+        const working = workingAgents.has(item.agent)
+        const raw = Number(item.lastActive)
+        const last = raw > 1e12 ? Math.floor(raw / 1000) : raw
+        const recent = last > 0 && nowSec - last <= 60
+        const active = working || recent
         return Object.assign({}, item, {
           active,
           running: active ? 1 : 0,
-          activeSessions: active ? (item.activeSessions || item.sessions || 0) : 0
+          activeSessions: working ? (item.activeSessions || item.sessions || 0) : 0
         })
       })
       ai.activeAgents = ai.agents.filter((item) => item.active).length
@@ -451,7 +460,7 @@ export async function mount(root, ctx) {
   }
 
   if (typeof window.__hlApplySettings === 'function') {
-    window.__hlApplySettings({ anim, compat, gpu, toolRows, agentRows })
+    window.__hlApplySettings({ anim, compat, gpu, toolRows, agentRows, idleSpinSec })
   }
 
   refreshRate()
@@ -514,6 +523,10 @@ function mountSettings(root, ctx) {
       <input id="hls-agent-rows" type="number" min="3" max="12" step="1" value="8">
       <span class="muted">默认 8，可设 3–12（超出的 Agent 在末行轮换）</span>
     </label>
+    <label>空闲圆环旋转间隔
+      <input id="hls-idle-spin" type="number" min="2" max="60" step="1" value="3">
+      <span class="muted">秒</span>
+    </label>
     <label><input type="checkbox" id="hls-compat"> 兼容模式（DPR=1，关闭 will-change 与 CSS 动画）</label>
     <div><button id="hls-save">保存</button> <span class="muted save-msg" id="hls-msg"></span></div>
     <div class="muted">页面与动效来自 HALOFLUX 原作；数据来自 Studio 会话/用量接口与本机指标。插件只读，不读取数据库文件，不发外部网络请求。</div>
@@ -559,6 +572,7 @@ function mountSettings(root, ctx) {
   const compatBox = wrap.querySelector('#hls-compat')
   const toolRowsBox = wrap.querySelector('#hls-tool-rows')
   const agentRowsBox = wrap.querySelector('#hls-agent-rows')
+  const idleSpinBox = wrap.querySelector('#hls-idle-spin')
   const titleInput = wrap.querySelector('#hls-title')
   const msg = wrap.querySelector('#hls-msg')
   let msgTimer = 0
@@ -592,10 +606,11 @@ function mountSettings(root, ctx) {
     compatBox.checked = !!(s && s.compat)
     toolRowsBox.value = String(clampInt(s && s.toolRows, 3, MAX_TOOL_ROWS, 8))
     agentRowsBox.value = String(clampInt(s && s.agentRows, 3, MAX_AGENT_ROWS, 8))
+    idleSpinBox.value = String(clampInt(s && s.idleSpinSec, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT))
     titleInput.value = (s && s.title) || ''
   }).catch(() => {
     showIconBox.checked = true; wallpaperBox.checked = false
-    animBox.checked = true; gpuBox.checked = true; updateWallpaperUrl()
+    animBox.checked = true; gpuBox.checked = true; idleSpinBox.value = '3'; updateWallpaperUrl()
   })
   wrap.querySelector('#hls-save').onclick = async () => {
     try {
@@ -609,6 +624,7 @@ function mountSettings(root, ctx) {
         compat: !!compatBox.checked,
         toolRows: clampInt(toolRowsBox.value, 3, MAX_TOOL_ROWS, 8),
         agentRows: clampInt(agentRowsBox.value, 3, MAX_AGENT_ROWS, 8),
+        idleSpinSec: clampInt(idleSpinBox.value, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT),
         title: titleInput.value.trim()
       })
       if (saved && typeof saved.wallpaperToken === 'string' && saved.wallpaperToken !== wallpaperTokenBox.value) {

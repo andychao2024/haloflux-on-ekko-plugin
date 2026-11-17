@@ -38,10 +38,14 @@ function pageHtml(html, display) {
   const safe = escapeHtml(title || 'HALOFLUX ON Ekko').slice(0, 80)
   if (title) out = out.replace(/<h1>[^<]*<\/h1>/, '<h1>' + safe + '</h1>')
   out = out.replace(/<title>[^<]*<\/title>/, '<title>' + safe + '</title>')
+  const idleSpin = Number(d.idleSpinSec)
+  const idleSpinSec = Number.isFinite(idleSpin)
+    ? Math.min(60, Math.max(2, Math.round(idleSpin))) : 3
   const boot = '<script>(function(){' +
     'window.__hlShowGpu=' + (d.gpu !== false ? 'true' : 'false') + ';' +
     'window.__hlToolRows=' + clampRows(d.toolRows, 3, 15) + ';' +
     'window.__hlAgentRows=' + clampRows(d.agentRows, 3, 12) + ';' +
+    'window.__hlIdleSpinSec=' + idleSpinSec + ';' +
     'window.__wpPaused=' + (d.anim === false ? 'true' : 'false') + ';' +
     'window.__hlAnim=' + (d.anim !== false ? 'true' : 'false') + ';' +
     (d.compat ? "try{Object.defineProperty(window,'devicePixelRatio',{get:function(){return 1},configurable:true})}catch(e){}" : '') +

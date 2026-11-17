@@ -27,6 +27,8 @@
   --pink:#f0a6c6; --teal:#98e0cf;
 }
 *{box-sizing:border-box}
+/* 空闲时只保留 canvas 圆环轻转；CSS 动画和过渡全部暂停。 */
+html.hl-idle-only *,html.hl-idle-only *::before,html.hl-idle-only *::after{animation-play-state:paused !important;transition:none !important}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:ui-monospace,"Cascadia Mono","SF Mono",Consolas,"Liberation Mono",monospace;overflow:hidden}
 .app{display:grid;grid-template-rows:auto minmax(0,1fr) auto;height:100vh}
 
@@ -877,6 +879,12 @@ function ringMove() {
   if (rnd() < 0.08) d = -d * 0.5;  d *= C.ringSpeed;
   Object.assign(rot, { from: ringRot, to: ringRot + d, t: 0, dur, ease, hold: rr(0.04, 0.4) * C.ringPause });
 }
+/* 空闲时轻转一下：只让圆环走一小段角度，转完立即停住。 */
+function idleRingNudge() {
+  const d = (rnd() < 0.5 ? 1 : -1) * rr(0.12, 0.22) * C.ringSpeed;
+  Object.assign(rot, { from: ringRot, to: ringRot + d, t: 0, dur: rr(0.32, 0.48), ease: easeIO, hold: 0 });
+}
+window.idleRingNudge = idleRingNudge;
 function flashSlotAt(ang) {
   let best = null, bd = 9;
   for (const s of slots) { const d = Math.abs(normA(s.a + ringRot - ang)); if (d < bd) { bd = d; best = s; } }
@@ -1692,7 +1700,7 @@ function syncPanel() {
 })();
 </script>
 <script src="wp.js"></script>
-<script src="ai-link.js?v=2.46"></script>
+<script src="ai-link.js?v=2.48"></script>
 <script>
 setTimeout(function () {
   var root = document.documentElement;

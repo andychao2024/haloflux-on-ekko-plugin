@@ -18,14 +18,15 @@ export function parseLiveEvent(event) {
   if (name === 'tool.started' || name === 'tool.completed' || name === 'tool.failed') {
     const toolName = event.tool_name || event.name || event.tool || 'tool'
     const raw = event.args !== undefined ? event.args
-      : (event.arguments !== undefined ? event.arguments : event.preview)
+      : (event.arguments !== undefined ? event.arguments
+        : (event.input !== undefined ? event.input : event.preview))
     const arg = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' ? toolArg(raw) : '')
     return {
       kind: 'tool',
       state: name === 'tool.started' ? 'running' : (name === 'tool.failed' ? 'error' : 'done'),
       name: String(toolName),
       arg: String(arg || '').slice(0, 160),
-      callId: String(event.tool_call_id || event.id || '')
+      callId: String(event.tool_call_id || event.callId || event.id || '')
     }
   }
   if (name === 'run.started' || name === 'run.updated' || name === 'run.queued') {
@@ -41,8 +42,9 @@ export function parseLiveEvent(event) {
   if (name === 'resumed') {
     return {
       kind: 'resume',
-      working: !!event.isWorking,
-      plans: Array.isArray(event.taskPlans) ? event.taskPlans : []
+      working: !!(event.isWorking !== undefined ? event.isWorking : event.working),
+      plans: Array.isArray(event.taskPlans) ? event.taskPlans
+        : (Array.isArray(event.task_plans) ? event.task_plans : [])
     }
   }
   return null

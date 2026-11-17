@@ -24,7 +24,7 @@
 
   /* ------------------------------------------------------------ settings */
 
-  var BUILD = 'v2.44';   // 写入 <html data-ai-build> 与 __aiLink.state().build，便于确认刷新到了新版
+  var BUILD = 'v2.46';   // 写入 <html data-ai-build> 与 __aiLink.state().build，便于确认刷新到了新版
   // v2.3：分享令牌 ?k= 由服务端 v1.8.0 强制校验；检测 401 时 HUD 显示"需要访问令牌"
   // v2.4：右上角新增 BGM 音乐开关（默认关闭），与"显示"按钮并排
   // v2.6：右上角两个开关统一进 flex 容器并清掉旧的 fixed 定位，窄屏换行不重叠
@@ -94,6 +94,7 @@
     autoCamera: true,          // 跟官方一致：默认开启自动运镜（手动缩放/拖动会临时接管）
     autoSpin: true,            // 跟官方一致：默认开启圆环自动旋转（滚轮手动转会短暂优先）
     spinWhenIdle: false,       // false = 没有 agent 活动时圆环冻结，保持不动
+    idleSpinSec: 3,            // 空闲时每隔多少秒轻转一下
     camWhenIdle: false,        // false = 空闲时自动运镜也停下，画面完全静止
     busyGraceSec: 30,          // 最后一次 agent 事件后继续转多久（避免工具间隙频繁停转）
     pendingBusySec: 600,       // 未完成回合（最后一条不是已完成的助手回复）最长算“工作中”
@@ -1272,6 +1273,37 @@
     else vd.raf = setTimeout(function () { visualFrame(Date.now()); }, 33);
   }
 
+  function idleSpinSeconds() {
+    var n = Number(window.__hlIdleSpinSec);
+    return isNum(n) ? clamp(n, 2, 60) : CONFIG.idleSpinSec;
+  }
+
+  /** 空闲时每隔 N 秒让圆环轻转一下，转完立刻停住。 */
+  function updateIdleSpin(now) {
+    if (CAM.spinActive || !CONFIG.autoSpin || window.__wpPaused || window.__hlAnim === false) {
+      CAM.idleAt = 0;
+      CAM.idleSpinAt = 0;
+      return;
+    }
+    if (!CAM.idleAt) {
+      CAM.idleAt = now;
+      CAM.idleSpinAt = now;
+      return;
+    }
+    if (now - CAM.idleSpinAt < idleSpinSeconds() * 1000) return;
+    CAM.idleSpinAt = now;
+    try {
+      if (typeof window.idleRingNudge === 'function') {
+        window.idleRingNudge();
+      } else if (typeof ringMove === 'function') {
+        CAM.idleNudge = true;
+        ringMove();
+      }
+    } catch (e) { /* ignore */ } finally {
+      CAM.idleNudge = false;
+    }
+  }
+
   /** 只有 agent 有活动时圆环才转；空闲时冻结在当前角度。
       tokensPerSecond 越高，节拍与圆环通过 CAM.rateTarget 加速（1×~1.8×）。 */
   function updateMotion(d) {
@@ -1306,6 +1338,9 @@
       CAM.pendingSec = null;
     }
     CAM.spinActive = CONFIG.spinWhenIdle ? true : busy;
+    // 只处理残留的 CSS 动画；canvas 舞台保持 0.9.15 的原有运动。
+    try { document.documentElement.classList.toggle('hl-idle-only', !CAM.spinActive); } catch (e) { /* ignore */ }
+    updateIdleSpin(Date.now());
     CAM.lastAge = age;
     CAM.tps = tps;
     // sqrt 让低吞吐也有可感知的提速，高吞吐再平滑接近上限。
@@ -2914,6 +2949,9 @@
     ringHooked: false,
     manualSpinUntil: 0,       // 手动滚轮转环后的保护期，期间不让节拍自动转向覆盖
     spinActive: false,        // 当前是否有 agent 活动；false 时圆环自动冻结
+    idleAt: 0,                // 本轮空闲开始时间
+    idleSpinAt: 0,            // 上一次空闲轻转时间
+    idleNudge: false,         // 正在执行空闲轻转
     rate: 0,                  // 当前节拍/圆环倍率（0=停，1=正常，最高约 1.8）
     rateTarget: 0,            // 由 tokensPerSecond 计算的目标倍率
     tps: 0,                   // 最近一次采样的 tokens/s，调试用
@@ -2974,7 +3012,7 @@
       if (typeof ringMove === 'function') {
         var origMove = ringMove;
         ringMove = function () {
-          if (!CONFIG.autoSpin || !CAM.spinActive) return;
+          if (!CONFIG.autoSpin || (!CAM.spinActive && !CAM.idleNudge)) return;
           if (Date.now() < CAM.manualSpinUntil) return;   // 刚用滚轮转过，别马上被节拍改回去
           origMove();
         };

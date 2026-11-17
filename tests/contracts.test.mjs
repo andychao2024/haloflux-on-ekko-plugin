@@ -5,11 +5,11 @@ import { assertContracts, validateModel } from '../sdk/harness/contracts.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('../contracts/plugin.json', import.meta.url), 'utf8')))
 
-test('settings model requires the ten declared fields', () => {
+test('settings model requires the eleven declared fields', () => {
   const value = {
     anim: true, compat: false, gpu: true, showIcon: true,
     wallpaper: false, wallpaperPort: 8790, wallpaperToken: 'test-token',
-    toolRows: 8, agentRows: 8, title: 'HALOFLUX ON Ekko'
+    toolRows: 8, agentRows: 8, idleSpinSec: 3, title: 'HALOFLUX ON Ekko'
   }
   assert.deepEqual(validateModel(contract, 'settings', value), value)
   assert.throws(() => validateModel(contract, 'settings', { anim: true }), /missing/)
@@ -17,6 +17,8 @@ test('settings model requires the ten declared fields', () => {
   assert.throws(() => validateModel(contract, 'settings', { ...value, title: 1 }), /expected string/)
   assert.throws(() => validateModel(contract, 'settings', { ...value, toolRows: 2 }), /outside range/)
   assert.throws(() => validateModel(contract, 'settings', { ...value, agentRows: 13 }), /outside range/)
+  assert.throws(() => validateModel(contract, 'settings', { ...value, idleSpinSec: 1 }), /outside range/)
+  assert.throws(() => validateModel(contract, 'settings', { ...value, idleSpinSec: 61 }), /outside range/)
 })
 
 test('wallpaper status model reports viewers and running state', () => {

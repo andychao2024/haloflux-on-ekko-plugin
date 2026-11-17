@@ -86,9 +86,28 @@ export function createStore() {
     const st = streamFor(sessionId)
     const text = String(delta || '')
     if (!text) return
+    // 历史回填的是上一回合的最终思考；本轮实时增量到来时先清掉，
+    // 否则 snapshot 的 reasoning 优先级会让页面一直显示旧内容。
+    if (st.backfilled) {
+      st.reasoning = ''
+      st.output = ''
+      st.backfilled = false
+    }
     if (kind === 'reasoning') st.reasoning = clip(st.reasoning + text)
     else st.output = clip(st.output + text)
     st.ts = Date.now()
+  }
+
+  /** 新回合的第一个实时事件到达：丢弃上一回合的历史回填文本。 */
+  function markLive(sessionId) {
+    const st = streamFor(sessionId)
+    if (st.backfilled) {
+      st.reasoning = ''
+      st.output = ''
+      st.backfilled = false
+    }
+    st.ts = Date.now()
+    return st
   }
 
   function setWorking(sessionId, working, extra = {}) {
@@ -230,6 +249,8 @@ export function createStore() {
   function backfillStream(sessionId, text, ts) {
     if (!text) return
     const st = streamFor(sessionId)
+    // 当前回合仍在工作时不回填上一回合的最终思考，否则会盖住实时输出。
+    if (st.working) return
     // 实时增量优先；只有历史回填的数据允许被更新，避免思考流永远停在第一次。
     if (st.reasoning && !st.backfilled) return
     st.reasoning = clip(text)
@@ -440,6 +461,6 @@ export function createStore() {
     upsertSessions, streamFor, appendDelta, setWorking, noteTool, setPlan,
     addEvent, setUsage, setRate, setSkills, setSessionUsage, setContextLimit, setToolHistory,
     finishTool, noteSignal, motion,
-    backfillStream, snapshot
+    backfillStream, markLive, snapshot
   }
 }

@@ -45,6 +45,12 @@
           "minimum": 3,
           "maximum": 12
         },
+        "idleSpinSec": {
+          "type": "integer",
+          "description": "没有 Agent 活动时，圆环每隔多少秒轻转一次；默认 3，最小 2，最大 60。超出范围的取值按边界保存。",
+          "minimum": 2,
+          "maximum": 60
+        },
         "title": {
           "type": "string",
           "description": "看板左上角标题；空字符串使用默认标题。",
@@ -72,6 +78,7 @@
         "anim",
         "compat",
         "gpu",
+        "idleSpinSec",
         "showIcon",
         "title",
         "toolRows",

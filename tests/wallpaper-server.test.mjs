@@ -42,7 +42,7 @@ test('wallpaper page follows plugin display settings and counts authenticated vi
     port: 0,
     token: 'secret-token',
     viewerTtlMs: 200,
-    display: { anim: false, compat: true, gpu: false, toolRows: 10, agentRows: 5, title: '我的看板' },
+    display: { anim: false, compat: true, gpu: false, toolRows: 10, agentRows: 5, idleSpinSec: 7, title: '我的看板' },
     getStats: async () => ({ ai: { build: 'v0.0' } })
   })
   try {
@@ -53,6 +53,7 @@ test('wallpaper page follows plugin display settings and counts authenticated vi
     assert.match(html, /__hlShowGpu=false/)
     assert.match(html, /__hlToolRows=10/)
     assert.match(html, /__hlAgentRows=5/)
+    assert.match(html, /__hlIdleSpinSec=7/)
     assert.match(html, /__wpPaused=true/)
     assert.match(html, /#stage\{visibility:hidden\}/)
     assert.match(html, /animation:none/)
