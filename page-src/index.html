@@ -29,6 +29,10 @@
 *{box-sizing:border-box}
 /* 空闲时只保留 canvas 圆环轻转；CSS 动画和过渡全部暂停。 */
 html.hl-idle-only *,html.hl-idle-only *::before,html.hl-idle-only *::after{animation-play-state:paused !important;transition:none !important}
+/* 代理调度面板不要停在半帧：直接移除流光、扫光和状态点动画。 */
+html.hl-idle-only .aix-pane.ap .ag::after,
+html.hl-idle-only .aix-pane.ap .ag.on .cell.on,
+html.hl-idle-only .aix-pane.ap .ag.on .pdot{animation:none !important}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:ui-monospace,"Cascadia Mono","SF Mono",Consolas,"Liberation Mono",monospace;overflow:hidden}
 .app{display:grid;grid-template-rows:auto minmax(0,1fr) auto;height:100vh}
 
@@ -1700,7 +1704,7 @@ function syncPanel() {
 })();
 </script>
 <script src="wp.js"></script>
-<script src="ai-link.js?v=2.48"></script>
+<script src="ai-link.js?v=2.49"></script>
 <script>
 setTimeout(function () {
   var root = document.documentElement;

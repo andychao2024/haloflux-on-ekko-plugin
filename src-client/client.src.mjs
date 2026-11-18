@@ -30,6 +30,9 @@ function pageWithTitle(html, title) {
 }
 
 export async function mount(root, ctx) {
+  // 页面内联脚本的构建号；插件页 stats 必须返回同一个值，
+  // 否则页面 checkBuild 会把 'plugin' 当成新版本并周期性重载。
+  const PAGE_BUILD = (PAGE_HTML.match(/var BUILD = '([^']+)'/) || [])[1] || ''
   // 侧栏入口开关默认开启：每次打开看板或设置页时顺手校正一次。
   // Studio 升级后导航配置可能被重置，这里能把插件入口自动补回来。
   ctx.rpc.call('ensure-navigation').catch(() => {})
@@ -81,6 +84,7 @@ export async function mount(root, ctx) {
   const handles = new Map()       // sessionId -> HostSession
   const liveTools = []
   const backfillTried = new Set()
+  const firstChecked = new Set()
   const toolBackfill = new Map()      // sessionId -> { at, entries }
   const toolBusy = new Set()
   const pendingSessions = new Map()   // sessionId -> { working, at, agent }
@@ -207,6 +211,36 @@ export async function mount(root, ctx) {
     }
   }
 
+  /** 页面首次进入时，用最后一条消息判断会话是否仍在回合中。
+      Codex 等外部 Agent 的 last_active 可能很久不更新，不能只等实时事件。 */
+  function firstCheck(meta) {
+    if (!meta || !meta.id || firstChecked.has(meta.id)) return Promise.resolve()
+    firstChecked.add(meta.id)
+    if (!ctx.host || !ctx.host.sessions || typeof ctx.host.sessions.messages !== 'function') {
+      return Promise.resolve()
+    }
+    return ctx.host.sessions.messages(meta.id, { limit: 12 }).then((res) => {
+      const messages = res && Array.isArray(res.messages) ? res.messages : []
+      if (!messagesWorking(messages)) return
+      const slot = liveSlot(meta.id, meta)
+      if (!slot.working) {
+        slot.working = true
+        slot.workStartedAt = slot.workStartedAt || Date.now()
+        slot.ts = Date.now()
+      }
+      // 首次检测结果同时放进 pending，避免随后的 resumed(isWorking:false)
+      // 或空实时事件把它立刻覆盖掉。
+      pendingSessions.set(meta.id, {
+        working: true, at: Date.now(), agent: meta.agent || 'unknown', first: true
+      })
+    }).catch(() => { /* 首次检测失败不阻塞页面 */ })
+  }
+
+  async function firstCheckAll(sessions) {
+    const targets = (sessions || []).slice(0, 4).filter((meta) => meta && meta.id)
+    await Promise.all(targets.map(firstCheck))
+  }
+
   async function ensureLive(sessions) {
     if (!ctx.host || !ctx.host.sessions || typeof ctx.host.sessions.connect !== 'function') return
     const targets = (sessions || []).slice(0, 4).filter((meta) => meta && meta.id)
@@ -271,10 +305,12 @@ export async function mount(root, ctx) {
       toolBackfill.set(meta.id, { at: now, entries: rec ? rec.entries : [] })
       ctx.host.sessions.messages(meta.id, { limit: 40 }).then((res) => {
         const messages = Array.isArray(res && res.messages) ? res.messages : []
+        const previous = pendingSessions.get(meta.id)
         pendingSessions.set(meta.id, {
           working: messagesWorking(messages),
           at: Date.now(),
-          agent: meta.agent || 'unknown'
+          agent: meta.agent || 'unknown',
+          first: !!(previous && previous.first)
         })
         const entries = parseToolMessages(messages, MAX_TOOL_ROWS, Date.now())
           .map((item) => Object.assign({}, item, { agent: meta.agent || 'unknown' }))
@@ -399,7 +435,7 @@ export async function mount(root, ctx) {
       }
     }
     for (const [id, rec] of pendingSessions) {
-      if (rec.working && Date.now() - rec.at < 60 * 1000 && recentWorkIds.has(id)) {
+      if (rec.working && Date.now() - rec.at < 60 * 1000 && (recentWorkIds.has(id) || rec.first)) {
         workingAgents.add(rec.agent)
       }
     }
@@ -431,7 +467,6 @@ export async function mount(root, ctx) {
       try {
         const data = await ctx.rpc.call('stats')
         if (data) {
-          applyLive(data)
           const liveList = []
           const liveSeen = new Set()
           for (const meta of (data.activeSessions || []).concat(data.recentSessions || [])) {
@@ -439,6 +474,11 @@ export async function mount(root, ctx) {
             liveSeen.add(meta.id)
             liveList.push(meta)
           }
+          // 首次进入时先看最后一条消息，避免 Codex 等 last_active 不更新的
+          // 会话要等下一轮实时事件才显示激活。
+          await firstCheckAll(liveList)
+          if (data.ai && PAGE_BUILD) data.ai.build = PAGE_BUILD
+          applyLive(data)
           ensureLive(liveList)
           backfill(data.recentSessions)
           backfillTools(data.recentSessions)

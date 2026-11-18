@@ -13,7 +13,7 @@ import { applyWallpaperActivity } from './src/wallpaper-activity.mjs'
 import { createConnections } from './src/conn.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.9.20'
+const VERSION = '0.9.22'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -38,6 +38,7 @@ const AGENT_ROWS_MAX = 12
 const IDLE_SPIN_DEFAULT = 3
 const IDLE_SPIN_MIN = 2
 const IDLE_SPIN_MAX = 60
+const WALLPAPER_PENDING_WINDOW_SEC = 3600
 
 const WALLPAPER_PORT_DEFAULT = 8790
 
@@ -58,6 +59,30 @@ export function apply(ctx) {
   // 把当前回合的思考/工具/计划写进共享 store。
   const liveConn = createConnections({ host: ctx.host, store, log: ctx.log, max: 4 })
   const dumpDir = ctx.paths && ctx.paths.dataDir ? ctx.paths.dataDir : null
+  // 重启后先恢复上次成功拿到的会话列表；Studio 后台 host API 在没有
+  // 插件页时可能暂时不可用，至少让壁纸端还能显示并连接已知会话。
+  try {
+    if (dumpDir) {
+      const cached = JSON.parse(readFileSync(join(dumpDir, 'snapshot.json'), 'utf8'))
+      const list = Array.isArray(cached && cached.sessions) ? cached.sessions : []
+      if (list.length) {
+        store.upsertSessions(list.map((s) => ({
+          id: s.id,
+          profile: s.profile,
+          agent: s.agent,
+          title: s.title,
+          last_active: s.lastActive,
+          message_count: s.messageCount,
+          input_tokens: s.inputTokens,
+          output_tokens: s.outputTokens,
+          cache_read_tokens: s.cacheRead,
+          cache_write_tokens: s.cacheWrite,
+          tool_call_count: s.toolCalls,
+          is_archived: s.archived
+        })))
+      }
+    }
+  } catch (_) { /* first run or old cache format */ }
   let lastViewerAt = 0
   let usageBusy = false
   let rateBusy = false
@@ -109,20 +134,22 @@ export function apply(ctx) {
 
   let liveToolAt = 0
 
-  async function backfillWallpaperTools() {
+  async function backfillWallpaperTools(run) {
+    const host = run && run.host ? run.host : ctx.host
     const recent = store.snapshot(null).recentSessions.slice(0, 4)
     for (const meta of recent) {
       if (!meta || !meta.id) continue
       try {
-        const res = await ctx.host.sessions.messages(meta.id, { limit: 40 })
+        const res = await host.sessions.messages(meta.id, { limit: 40 })
         const messages = Array.isArray(res && res.messages) ? res.messages : []
         const plans = Array.isArray(res && res.taskPlans) ? res.taskPlans : []
         if (plans[0]) store.setPlan(meta.id, plans[0])
         const at = now()
         const lastActive = Number(meta.lastActive) || 0
         const lastActiveSec = lastActive > 1e12 ? lastActive / 1000 : lastActive
-        // 未完成回合只在会话最近 10 分钟有活动时才算运行，避免遗弃会话让舞台一直转。
-        const recent = lastActiveSec > 0 && at / 1000 - lastActiveSec <= 600
+        // 外部 Agent（Codex 等）的 last_active 可能到回合结束才更新；
+        // 用 1 小时窗口兜底长回合，避免壁纸端误判为停止。
+        const recent = lastActiveSec > 0 && at / 1000 - lastActiveSec <= WALLPAPER_PENDING_WINDOW_SEC
         wallpaperPending.set(meta.id, { working: recent && messagesWorking(messages), at, agent: meta.agent || 'unknown' })
         const list = parseToolMessages(messages, 8, at).map((item) => ({
           profile: meta.profile || 'default',
@@ -447,17 +474,49 @@ export function apply(ctx) {
     if (!roleCache.has(run.identity.userId)) roleOf(run).catch(() => {})
     const resolved = role && role.then ? await role : role
     const profiles = resolved === 'super_admin' ? null : [run.identity.profile || 'default']
-    // 这些请求都在 Studio 进程内，耗时通常是几十毫秒；必须 await，
-    // 否则 RPC 返回时 run.signal 中止，请求会被取消（表现为 “operation was aborted”）。
-    if (now() - store.usage.fetchedAt > 60000) await pollUsage(run)
-    if (now() - store.skills.fetchedAt > 60000) await pollSkills(run)
-    await pollSessions(run)
-    try { await pollRate(run) } catch (_) { /* ignore */ }
-    if (now() - liveToolAt > 10000) {
-      liveToolAt = now()
-      try { await backfillWallpaperTools() } catch (_) { /* ignore */ }
+    // 壁纸 /stats 不能等待 Studio 后台 host 请求：没有插件页时这些请求
+    // 可能一直挂起。先返回缓存/实时连接数据，再在后台刷新；插件页 RPC
+    // 仍保持 await，确保页面首次打开时能拿到最新数据。
+    const liveMode = options.live === true
+    if (liveMode) {
+      if (now() - store.usage.fetchedAt > 60000) void pollUsage(run).catch(() => {})
+      if (now() - store.skills.fetchedAt > 60000) void pollSkills(run).catch(() => {})
+      void pollSessions(run).catch(() => {})
+      void pollRate(run).catch(() => {})
+      if (now() - liveToolAt > 10000) {
+        liveToolAt = now()
+        void backfillWallpaperTools(run).catch(() => {})
+      }
+    } else {
+      // 这些请求通常在几十毫秒内完成；必须 await，否则 RPC 返回时
+      // run.signal 中止会取消请求（日志里是 “operation was aborted”）。
+      if (now() - store.usage.fetchedAt > 60000) await pollUsage(run)
+      if (now() - store.skills.fetchedAt > 60000) await pollSkills(run)
+      await pollSessions(run)
+      try { await pollRate(run) } catch (_) { /* ignore */ }
+      if (now() - liveToolAt > 10000) {
+        liveToolAt = now()
+        try { await backfillWallpaperTools(run) } catch (_) { /* ignore */ }
+      }
     }
     const snap = store.snapshot(profiles)
+    writeDump('snapshot.json', {
+      at: now(),
+      sessions: [...store.sessions.values()].map((s) => ({
+        id: s.id,
+        profile: s.profile,
+        agent: s.agent,
+        title: s.title,
+        lastActive: s.lastActive,
+        messageCount: s.messageCount,
+        inputTokens: s.inputTokens,
+        outputTokens: s.outputTokens,
+        cacheRead: s.cacheRead,
+        cacheWrite: s.cacheWrite,
+        toolCalls: s.toolCalls,
+        archived: !!s.archived
+      }))
+    })
     // 只有壁纸服务自己的 /stats 才维持后台实时连接；插件页的 stats RPC
     // 已有页面端 live slot，不需要再重复订阅。
     const useLive = options.live === true && !!wallpaper
