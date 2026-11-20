@@ -1163,14 +1163,8 @@
 
   function flashScreen(strong) {
     if (!el.fxGlow) return;
-    try {
-      var s = el.fxScan;
-      if (strong && s) {
-        s.style.animation = 'none';
-        void s.offsetWidth;
-        s.style.animation = 'aix-fx-sweep 1100ms linear forwards';
-      }
-    } catch (e) { /* ignore */ }
+    // 屏幕级扫线影响观感，已按需求去掉：只保留缩放反馈的柔光 bloom，
+    // 不再触发 aix-fx-sweep 下扫亮线。
   }
 
   function updateScreenFx(p) {
@@ -2340,10 +2334,12 @@
     }
     // 同样最少显示 3 个：激活不足时用最近结束的计划补齐。
     var basePlans = chipBase(activePlans, plans);
+    // 计划锁定键也用 sessionId：同名字 Agent 可能有多个计划卡。
+    var planKey = function (x) { return (x && x.sessionId) || (x && x.agent) || ''; };
     var pinnedPlan = null;
     if (p.planPinned) {
       for (i = 0; i < basePlans.length; i++) {
-        if (basePlans[i].agent === p.planPinned) { pinnedPlan = basePlans[i]; break; }
+        if (planKey(basePlans[i]) === p.planPinned) { pinnedPlan = basePlans[i]; break; }
       }
       if (!pinnedPlan) p.planPinned = null;
     }
@@ -2359,12 +2355,13 @@
     }
     focus = pinnedPlan || activePlans[0] || basePlans[0] || plans[0] || null;
     var focusAgent = focus ? (focus.agent || '') : '';
+    var focusPlanKey = focus ? planKey(focus) : '';
 
     // 状态片：一个 Agent 一个，运行中的带脉冲点；当前查看的高亮。
-    var chipSig = focusAgent + '|';
+    var chipSig = focusPlanKey + '|';
     for (i = 0; i < viewPlans.length; i++) {
       var a = viewPlans[i] || {};
-      chipSig += (a.agent || '?') + ':' + (a.state || '') + ':' +
+      chipSig += planKey(a) + ':' + (a.state || '') + ':' +
         (a.sessionActive ? 1 : 0) + ':' +
         (isNum(a.done) ? a.done : 0) + '/' + (isNum(a.total) ? a.total : 0) + ',';
     }
@@ -2381,26 +2378,27 @@
           var tip = label + ' · ' + (pa.state || '—') +
             ' · ' + (isNum(pa.done) ? pa.done : 0) + '/' + (isNum(pa.total) ? pa.total : 0);
           chtml += '<span class="ss-chip' +
-            (pa.agent && pa.agent === focusAgent ? ' on' : '') +
+            (focus && planKey(pa) === focusPlanKey ? ' on' : '') +
             (live ? ' live' : '') +
             (pa.state === 'ended' ? ' off' : '') +
-            (pa.agent ? '" data-agent="' + escAttr(pa.agent) : '') +
+            (pa.agent ? '" data-agent="' + escAttr(pa.agent) + '" data-session="' + escAttr(pa.sessionId || '') + '"' : '') +
             '" title="' + escAttr(tip) + '">' +
             '<i class="ss-dot"></i>' + esc(label) + '</span>';
         }
         p.planChips.innerHTML = chtml;
         var chips = p.planChips.querySelectorAll('.ss-chip[data-agent]');
         for (i = 0; i < chips.length; i++) {
-          chips[i].onclick = (function (name) {
+          chips[i].onclick = (function (name, sid) {
+            var key = sid || name;
             return function (e) {
               if (e && e.stopPropagation) e.stopPropagation();
-              p.planPinned = (p.planPinned === name) ? null : name;
+              p.planPinned = (p.planPinned === key) ? null : key;
               p.planChipSig = '';
               p.planSig = '';
               renderPlan(p, d);
               return false;
             };
-          })(chips[i].getAttribute('data-agent'));
+          })(chips[i].getAttribute('data-agent'), chips[i].getAttribute('data-session'));
         }
       }
     }
@@ -2516,10 +2514,12 @@
     }
     // 激活不足 3 个时补上最近激活过的，至少显示 3 个状态片。
     var base = chipBase(active, list);
+    // 锁定用 sessionId（同名字 Agent 可能有多个会话，按 agent 名锁定会错位到第一个）。
+    var pinnedKey = function (x) { return (x && x.sessionId) || (x && x.agent) || ''; };
     var pinnedEntry = null;
     if (st.pinned) {
       for (i = 0; i < base.length; i++) {
-        if (base[i].agent === st.pinned) { pinnedEntry = base[i]; break; }
+        if (pinnedKey(base[i]) === st.pinned) { pinnedEntry = base[i]; break; }
       }
       // 锁定的 Agent 已不再显示：取消锁定，窗口回到最近激活列表。
       if (!pinnedEntry) st.pinned = null;
@@ -2537,10 +2537,13 @@
 
     if (p.forceCompact && p.el.clientWidth >= 340) p.forceCompact = false;
     var narrow = p.el.clientWidth < 340 || !!p.forceCompact;
-    var sig = (focusAgent || '') + (narrow ? '|c' : '|f') +
+    // 高亮跟随当前查看的会话（锁定时为被锁的会话，否则为最新激活），
+    // 用 sessionId 区分同名字 Agent 的多个会话。
+    var focusKey = focus ? pinnedKey(focus) : '';
+    var sig = (focusKey || '') + (narrow ? '|c' : '|f') +
       '|' + Math.round(p.el.clientWidth / 20) + '|';
     for (i = 0; i < view.length; i++) {
-      sig += view[i].agent + ':' + view[i].state + ':' + (view[i].working ? 1 : 0) + ',';
+      sig += pinnedKey(view[i]) + ':' + view[i].state + ':' + (view[i].working ? 1 : 0) + ',';
     }
     if (sig !== st.sig) {
       st.sig = sig;
@@ -2554,9 +2557,9 @@
           var label = narrow ? compactAgent(a.agent) : fullLabel;
           var tip = fullLabel + ' · ' + (a.state || '—') +
             (isNum(a.ageSec) ? ' · ' + ssAgeLabel(a.ageSec) : '');
-          html += '<span class="ss-chip' + (a.agent === focusAgent ? ' on' : '') +
+          html += '<span class="ss-chip' + (focus && pinnedKey(a) === focusKey ? ' on' : '') +
             (a.state === 'live' || a.working ? ' live' : '') +
-            '" data-agent="' + escAttr(a.agent) + '" title="' + escAttr(tip) + '">' +
+            '" data-agent="' + escAttr(a.agent) + '" data-session="' + escAttr(a.sessionId || '') + '" title="' + escAttr(tip) + '">' +
             '<i class="ss-dot"></i>' + esc(label) + '</span>';
         }
         p.chips.innerHTML = html;
@@ -2586,15 +2589,17 @@
         }
         var chips = p.chips.querySelectorAll('.ss-chip[data-agent]');
         for (i = 0; i < chips.length; i++) {
-          chips[i].onclick = (function (name) {
+          chips[i].onclick = (function (name, sid) {
+            // 锁定键用 sessionId（缺失时退回 agent 名），同名字 Agent 的多个会话可分别锁定。
+            var key = sid || name;
             return function (e) {
               if (e && e.stopPropagation) e.stopPropagation();
-              p.stream.pinned = (p.stream.pinned === name) ? null : name;
+              p.stream.pinned = (p.stream.pinned === key) ? null : key;
               p.stream.sig = '';
               renderStreams(p, d);
               return false;
             };
-          })(chips[i].getAttribute('data-agent'));
+          })(chips[i].getAttribute('data-agent'), chips[i].getAttribute('data-session'));
         }
       }
     }
@@ -2608,8 +2613,10 @@
       return;
     }
     var text = String(focus.text || '');
-    if (st.agent !== focus.agent || st.full !== text) {
-      st.agent = focus.agent;
+    // 用 sessionId 判断是否切换了会话：同名字 Agent 的两个会话文本也要重新打字。
+    var focusId = focus.sessionId || focus.agent;
+    if (st.agent !== focusId || st.full !== text) {
+      st.agent = focusId;
       st.full = text;
       st.shown = 0;
       p.textNode.nodeValue = '';
@@ -3207,13 +3214,7 @@
     CAM.level = 2;
     touchIdle();
     flashScreen(true);
-    if (el.fxScan) {
-      try {
-        el.fxScan.style.animation = 'none';
-        void el.fxScan.offsetWidth;
-        el.fxScan.style.animation = 'aix-fx-sweep 700ms linear forwards';
-      } catch (e) { /* ignore */ }
-    }
+    // 扫线特效已按需求去掉，聚焦缩放不再触发 aix-fx-sweep。
     return true;
   }
 

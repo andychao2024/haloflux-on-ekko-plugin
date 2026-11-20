@@ -51,6 +51,14 @@
           "minimum": 2,
           "maximum": 60
         },
+        "stage": {
+          "type": "string",
+          "description": "舞台配色主题；nova 为新版配色（紫罗兰 + 冰蓝 + 青绿等科技感流光），classic 为 HALOFLUX 原版（粉 + 淡紫）。默认 nova。",
+          "enum": [
+            "classic",
+            "nova"
+          ]
+        },
         "title": {
           "type": "string",
           "description": "看板左上角标题；空字符串使用默认标题。",
@@ -80,6 +88,7 @@
         "gpu",
         "idleSpinSec",
         "showIcon",
+        "stage",
         "title",
         "toolRows",
         "wallpaper",

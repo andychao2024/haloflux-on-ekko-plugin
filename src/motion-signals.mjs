@@ -12,7 +12,9 @@
  * 与 src/session-state.mjs、src/tool-history.mjs 一样，构建时会被内联进 client.mjs。
  */
 
-const PENDING_TTL_MS = 60 * 1000       // 历史轮询每 10 秒一次；60 秒没刷新就当作结束
+const PENDING_TTL_MS = 120 * 1000      // 历史轮询每 10 秒一次；轮询失败时服务端会沿用上次
+                                       // 工作状态续命，这里放宽到 120 秒扛住连续失败，
+                                       // 避免 codex 长工具执行期间闪断成离线。
 const LIVE_TTL_MS = 10 * 60 * 1000     // 实时 slot 没有结束事件时的兜底上限
 const SESSION_GRACE_SEC = 60           // 仅用于 last_active 的短活动窗口
 const IDLE_AGE_SEC = 999               // 没有任何信号：明确告诉舞台“空闲”

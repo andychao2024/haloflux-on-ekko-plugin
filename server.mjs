@@ -13,7 +13,7 @@ import { applyWallpaperActivity } from './src/wallpaper-activity.mjs'
 import { createConnections } from './src/conn.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.9.22'
+const VERSION = '0.10.03'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -39,6 +39,11 @@ const IDLE_SPIN_DEFAULT = 3
 const IDLE_SPIN_MIN = 2
 const IDLE_SPIN_MAX = 60
 const WALLPAPER_PENDING_WINDOW_SEC = 3600
+// 历史轮询兜底的保鲜窗口。轮询每 10 秒一次，但 Studio host 请求偶发被中止
+// （日志表现为 "operation was aborted"），一次失败就让 60 秒窗口断粮，
+// 会造成 codex 长工具执行期间「运行中→离线→又运行中」的闪烁。
+// 放宽到 120 秒（约可扛 10 次连续失败），配合失败时沿用上次工作状态。
+const WALLPAPER_PENDING_TTL_MS = 120 * 1000
 
 const WALLPAPER_PORT_DEFAULT = 8790
 
@@ -172,7 +177,16 @@ export function apply(ctx) {
           break
         }
         store.setToolHistory(meta.id, list)
-      } catch (_) { /* ignore */ }
+      } catch (error) {
+        // 轮询失败不推倒重来：沿用上一次的工作状态并续命（at 不更新内容只续时间戳，
+        // 由 WALLPAPER_PENDING_TTL_MS 限制最长续命），避免单次请求被中止时
+        // 看板把仍在工作的 codex 闪断成离线。
+        const prev = wallpaperPending.get(meta.id)
+        if (prev && prev.working) {
+          wallpaperPending.set(meta.id, { ...prev, at: now() })
+        }
+        ctx.log.warn('wallpaper pending poll failed: ' + String((error && error.message) || error))
+      }
     }
     const cutoff = now() - 300000
     for (const [id, rec] of wallpaperPending) if (!rec || rec.at < cutoff) wallpaperPending.delete(id)
@@ -187,6 +201,7 @@ export function apply(ctx) {
       toolRows: clampInt(settings.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(settings.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       idleSpinSec: clampInt(settings.idleSpinSec, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT),
+      stage: settings.stage === 'classic' ? 'classic' : 'nova',
       title: typeof settings.title === 'string' ? settings.title : ''
     }
   }
@@ -422,7 +437,7 @@ export function apply(ctx) {
       })
       .map((item) => item.id))
     for (const [id, rec] of wallpaperPending) {
-      if (!rec || !rec.working || now() - rec.at >= 60000) continue
+      if (!rec || !rec.working || now() - rec.at >= WALLPAPER_PENDING_TTL_MS) continue
       if (!recentWorkIds.has(id)) continue
       workingSessions.add(id)
       if (rec.agent) workingByAgent.set(rec.agent, (workingByAgent.get(rec.agent) || 0) + 1)
@@ -525,7 +540,7 @@ export function apply(ctx) {
     const workingSessions = new Set()
     const agentBySession = new Map()
     for (const [id, rec] of wallpaperPending) {
-      if (!rec || !rec.working || now() - rec.at >= 60000) continue
+      if (!rec || !rec.working || now() - rec.at >= WALLPAPER_PENDING_TTL_MS) continue
       workingSessions.add(id)
       if (rec.agent) agentBySession.set(id, rec.agent)
     }
@@ -618,6 +633,7 @@ export function apply(ctx) {
       toolRows: clampInt(saved.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(saved.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       idleSpinSec: clampInt(saved.idleSpinSec, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT),
+      stage: saved.stage === 'classic' ? 'classic' : 'nova',
       title: typeof saved.title === 'string' ? saved.title.slice(0, 80) : ''
     }
   })
@@ -646,6 +662,7 @@ export function apply(ctx) {
       toolRows: clampInt(input.toolRows, TOOL_ROWS_MIN, TOOL_ROWS_MAX, TOOL_ROWS_DEFAULT),
       agentRows: clampInt(input.agentRows, AGENT_ROWS_MIN, AGENT_ROWS_MAX, AGENT_ROWS_DEFAULT),
       idleSpinSec: clampInt(input.idleSpinSec, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT),
+      stage: input.stage === 'classic' ? 'classic' : 'nova',
       title: typeof input.title === 'string' ? input.title.replace(/[\r\n]/g, ' ').trim().slice(0, 80) : ''
     }
     await run.state.user.namespace('haloflux').set('settings', savedSettings)

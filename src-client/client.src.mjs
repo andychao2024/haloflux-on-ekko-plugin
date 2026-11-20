@@ -18,6 +18,72 @@ function clampInt(value, lo, hi, fallback) {
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : fallback
 }
 
+// 新版舞台配色（科技感）：只替换「圆环内」的装饰色（圆网曲线、跑灯、彗星），
+// 外层光环（buildOuter/HAZE_COL）、环上卡片（TINTS）、大气、车道、光斑等保持原版不动。
+// 背景（#08090b）、阴影、纯白高光、节点小圆圈（白色）一律不动。
+// 用「模板字面量里带动态 alpha」的精确前缀做替换，只命中圆环内的动态颜色，
+// 面板/数据图里固定 alpha 的粉色（rgba(240,166,198,.45) 等）不受影响。
+const STAGE_NOVA_REMAP = [
+  // 圆网曲线 6 色随机必须排在单色替换之前：前面两条单色规则会把
+  // k<0.1 / 其余两个分支的色值先改掉，导致整条 6 色匹配 MISS。
+  ['const k = rnd();\n    x.strokeStyle = k < 0.05 ? `rgba(240,166,198,${al})` : k < 0.1 ? `rgba(180,170,235,${al})` : `rgba(228,231,238,${al})`;',
+   'const k = rnd();\n    const ncol = (k * 6) | 0;\n    x.strokeStyle = [`rgba(240,166,198,${al})`, `rgba(248,192,140,${al})`, `rgba(150,105,255,${al})`, `rgba(111,216,255,${al})`, `rgba(214,232,244,${al})`, `rgba(95,232,192,${al})`][ncol];'],
+  ['rgba(180,170,235,${', 'rgba(150,105,255,${'],  // 圆网淡紫 → 亮紫罗兰 #9669ff（残余引用）
+  ['rgba(228,231,238,${', 'rgba(214,232,244,${'],  // 圆网冷白 → 冰蓝白 #d6e8f4
+  // 圆环内 6 色随机：原版粉 #f0a6c6 / 淡琥珀橙 #f8c08c（介于原版 #ffb066 与过淡的 #f4d0af 之间） / 紫罗兰 #9669ff / 冰蓝 #6fd8ff / 冰蓝白 #d6e8f4 / 青绿 #5fe8c0
+  // 彗星 6 色随机：tint 改为 0~5 六选一
+  ["c.tint ? '200,190,250' : '255,255,255'", "['150,105,255','214,232,244','240,166,198','111,216,255','248,192,140','95,232,192'][c.tint]"],
+  ['tint: rnd() < 0.15', 'tint: (rnd() * 6) | 0'],
+  // 节点标记小圈圈：约半数保留原白，其余从琥珀橙/紫罗兰/冰蓝/青绿四色随机
+  ['b.strokeStyle = `rgba(235,238,244,${rr(0.35, 0.8)})`; b.lineWidth = 0.8;',
+   'const ncc = rnd(); b.strokeStyle = ncc < 0.5 ? `rgba(235,238,244,${rr(0.35, 0.8)})` : [`rgba(248,192,140,${rr(0.35, 0.8)})`, `rgba(150,105,255,${rr(0.35, 0.8)})`, `rgba(111,216,255,${rr(0.35, 0.8)})`, `rgba(95,232,192,${rr(0.35, 0.8)})`][(ncc * 4) | 0]; b.lineWidth = 0.8;'],
+  // 点状圆环链：每条链整链一色（半数原白 + 四色随机）
+  ["b.strokeStyle = 'rgba(235,238,244,.55)'; b.lineWidth = 0.8;",
+   "b.strokeStyle = (rnd() < 0.5 ? 'rgba(235,238,244,.55)' : ['rgba(248,192,140,.55)', 'rgba(150,105,255,.55)', 'rgba(111,216,255,.55)', 'rgba(95,232,192,.55)'][(rnd() * 4) | 0]); b.lineWidth = 0.8;"],
+  // 环外三层（车道线/飞出流光/雾带）：三色版 —— 紫罗兰 #9669ff / 冰蓝 #6fd8ff / 青绿 #5fe8c0，
+  // 与圆环内科技风呼应。车道线用冰蓝，飞出流光 tint 0→紫罗兰(s0)/1→冰蓝(s1)，雾带 0/1/2→紫罗兰/冰蓝/青绿。
+  // 车道线：淡紫白 → 冰蓝，alpha 保持原版 0.035（三色观感更亮，不再额外提亮）
+  ['x.strokeStyle = `rgba(210,205,235,${rr(0.01, 0.035)})`; x.lineWidth = rr(0.5, 1);',
+   'x.strokeStyle = `rgba(111,216,255,${rr(0.01, 0.028)})`; x.lineWidth = rr(0.5, 1);'],
+  // 飞出流光单体（newFlyer）：保持原版 tint 二选一（s0 紫罗兰 / s1 冰蓝）
+  ['sp: rr(260, 900), lw: rnd() < 0.08 ? rr(1.2, 1.7) : rr(0.5, 1), lv: rnd() < 0.12 ? 1 : 0, tint: rnd() < 0.22 ? 1 : 0, burst: false',
+   'sp: rr(260, 900), lw: rnd() < 0.08 ? rr(1.2, 1.7) : rr(0.5, 1), lv: rnd() < 0.12 ? 1 : 0, tint: rnd() < 0.22 ? 1 : 0, burst: false'],
+  // 飞出流光爆发包（spawnFlyBurst）：概率还原原版（0.3）
+  ['const sp = rr(450, 1150), len = rr(70, 320), r0 = RO + rr(0, 8), tint = rnd() < 0.3 ? 1 : 0, lv = rnd() < 0.45 ? 2 : 1;',
+   'const sp = rr(450, 1150), len = rr(70, 320), r0 = RO + rr(0, 8), tint = rnd() < 0.3 ? 1 : 0, lv = rnd() < 0.45 ? 2 : 1;'],
+  // 飞出流光描边（drawFlyers）：保留原版渐变引用
+  ['S.strokeStyle = f0.tint ? GR.s1 : GR.s0;',
+   'S.strokeStyle = f0.tint ? GR.s1 : GR.s0;'],
+  // 雾带渐变（drawOuterFar）：保留原版 s0/s1/s2 三选一引用
+  ["S.strokeStyle = GR['s' + (h.tint === 1 ? 0 : h.tint === 2 ? 2 : 1)];",
+   "S.strokeStyle = GR['s' + (h.tint === 1 ? 0 : h.tint === 2 ? 2 : 1)];"],
+  // 雾带 tint 分布：沿用原版 0/1/2 三选一
+  ['tint: k < 0.55 ? 0 : k < 0.85 ? 1 : 2, drift: rr(-0.04, 0.04)',
+   'tint: k < 0.55 ? 0 : k < 0.85 ? 1 : 2, drift: rr(-0.04, 0.04)'],
+  // 三渐变改三色版（减淡：中段 .7→.45、末梢 .42→.3，整体比原版更淡）：s0 紫罗兰 / s1 冰蓝 / s2 青绿
+  ["GR.s0 = mkG([[0, 'rgba(248,248,255,1)'], [0.35, 'rgba(228,226,242,.8)'], [1, 'rgba(190,190,214,.3)']], RMAX * 0.95);",
+   "GR.s0 = mkG([[0, 'rgba(150,105,255,1)'], [0.35, 'rgba(150,105,255,.45)'], [1, 'rgba(120,80,220,.3)']], RMAX * 0.95);"],
+  ["GR.s1 = mkG([[0, 'rgba(240,236,255,1)'], [0.3, 'rgba(196,182,244,.82)'], [1, 'rgba(160,140,228,.3)']], RMAX * 0.95);",
+   "GR.s1 = mkG([[0, 'rgba(111,216,255,1)'], [0.3, 'rgba(111,216,255,.45)'], [1, 'rgba(70,160,210,.3)']], RMAX * 0.95);"],
+  ["GR.s2 = mkG([[0, 'rgba(225,245,242,1)'], [0.3, 'rgba(176,214,210,.8)'], [1, 'rgba(140,180,186,.3)']], RMAX * 0.95);",
+   "GR.s2 = mkG([[0, 'rgba(95,232,192,1)'], [0.3, 'rgba(95,232,192,.45)'], [1, 'rgba(50,170,140,.3)']], RMAX * 0.95);"],
+  // 雾带光晕 HAZE_COL：改三色版（紫罗兰 / 冰蓝 / 青绿）
+  ["const HAZE_COL = ['196,180,252', '242,242,252', '190,222,222'];",
+   "const HAZE_COL = ['150,105,255', '111,216,255', '95,232,192'];"],
+  // 雾带描边 alpha 因子还原原版（0.05 / 0.6）：三色饱和度高，不再额外提亮
+  ['S.globalAlpha = Math.min(1, h.alpha * e * 0.05 * C.hazeBright); S.lineWidth = 2.2; S.stroke();',
+   'S.globalAlpha = Math.min(1, h.alpha * e * 0.04 * C.hazeBright); S.lineWidth = 2.2; S.stroke();'],
+  ['S.globalAlpha = Math.min(1, h.alpha * e * 0.6 * C.hazeBright); S.lineWidth = 0.55; S.stroke();',
+   'S.globalAlpha = Math.min(1, h.alpha * e * 0.5 * C.hazeBright); S.lineWidth = 0.55; S.stroke();']
+]
+
+function applyStageTheme(code, stage) {
+  if (stage === 'classic') return code
+  let out = code
+  for (const [from, to] of STAGE_NOVA_REMAP) out = out.split(from).join(to)
+  return out
+}
+
 function pageWithTitle(html, title) {
   const clean = String(title || '').trim()
   if (!clean) return html
@@ -52,6 +118,7 @@ export async function mount(root, ctx) {
   const toolRows = clampInt(settings && settings.toolRows, 3, 15, 8)
   const agentRows = clampInt(settings && settings.agentRows, 3, 12, 8)
   const idleSpinSec = clampInt(settings && settings.idleSpinSec, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT)
+  const stage = (settings && settings.stage === 'classic') ? 'classic' : 'nova'
   const title = (settings && typeof settings.title === 'string') ? settings.title.trim() : ''
 
   const style = document.createElement('style')
@@ -495,7 +562,7 @@ export async function mount(root, ctx) {
 
   for (const code of scripts) {
     const el = document.createElement('script')
-    el.textContent = code
+    el.textContent = applyStageTheme(code, stage)
     root.appendChild(el)
   }
 
@@ -553,6 +620,12 @@ function mountSettings(root, ctx) {
     </label>
     <div class="muted">壁纸地址：<span id="hls-wallpaper-url">http://127.0.0.1:8790/</span></div>
     <div class="muted">壁纸访问者：<span id="hls-wallpaper-viewers">0</span></div>
+    <label>舞台配色
+      <select id="hls-stage">
+        <option value="nova">Nova</option>
+        <option value="classic">HALOFLUX</option>
+      </select>
+    </label>
     <label><input type="checkbox" id="hls-anim"> 显示原版动效舞台（iframe 模式，默认开启）</label>
     <label><input type="checkbox" id="hls-gpu"> 显示显卡（GPU 曲线与显存，默认开启；未检测到显卡时不显示）</label>
     <label>工具调用显示条数
@@ -613,6 +686,7 @@ function mountSettings(root, ctx) {
   const toolRowsBox = wrap.querySelector('#hls-tool-rows')
   const agentRowsBox = wrap.querySelector('#hls-agent-rows')
   const idleSpinBox = wrap.querySelector('#hls-idle-spin')
+  const stageBox = wrap.querySelector('#hls-stage')
   const titleInput = wrap.querySelector('#hls-title')
   const msg = wrap.querySelector('#hls-msg')
   let msgTimer = 0
@@ -647,6 +721,7 @@ function mountSettings(root, ctx) {
     toolRowsBox.value = String(clampInt(s && s.toolRows, 3, MAX_TOOL_ROWS, 8))
     agentRowsBox.value = String(clampInt(s && s.agentRows, 3, MAX_AGENT_ROWS, 8))
     idleSpinBox.value = String(clampInt(s && s.idleSpinSec, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT))
+    stageBox.value = (s && s.stage === 'classic') ? 'classic' : 'nova'
     titleInput.value = (s && s.title) || ''
   }).catch(() => {
     showIconBox.checked = true; wallpaperBox.checked = false
@@ -665,6 +740,7 @@ function mountSettings(root, ctx) {
         toolRows: clampInt(toolRowsBox.value, 3, MAX_TOOL_ROWS, 8),
         agentRows: clampInt(agentRowsBox.value, 3, MAX_AGENT_ROWS, 8),
         idleSpinSec: clampInt(idleSpinBox.value, IDLE_SPIN_MIN, IDLE_SPIN_MAX, IDLE_SPIN_DEFAULT),
+        stage: stageBox.value === 'classic' ? 'classic' : 'nova',
         title: titleInput.value.trim()
       })
       if (saved && typeof saved.wallpaperToken === 'string' && saved.wallpaperToken !== wallpaperTokenBox.value) {

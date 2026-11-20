@@ -15,4 +15,4 @@
 设置存放在 `namespace(String(run.identity.userId), run.identity.profile)` 的 settings 键中，
 当前格式版本为 1。记录不存在时返回 `{ greeting: 'Hello', compact: false }`。
 首次创建无历史记录需要迁移。增加字段时说明缺失值的默认行为；改变存储含义时在这里写清迁移方案，
-同步修改实现及边界测试。
+同步修改实现。
