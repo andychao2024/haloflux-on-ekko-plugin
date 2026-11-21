@@ -275,6 +275,10 @@ export async function mount(root, ctx) {
     if (name === 'resumed') {
       slot.working = !!event.isWorking
       slot.workStartedAt = slot.working ? Date.now() : 0
+      // resume 也是一次「会话状态刷新」：必须刷新 ts，否则 slot.ts=0 时
+      // applyLive 的 10 分钟保鲜守卫（要求 slot.ts 为真值）永远无法把
+      // 卡死的 working 标记复位——代理调度就会一直显示运行中。
+      slot.ts = Date.now()
       const plans = Array.isArray(event.taskPlans) ? event.taskPlans : []
       if (plans[0]) slot.plan = plans[0]
     }
@@ -508,7 +512,8 @@ export async function mount(root, ctx) {
     // （CodeBuddy 等外部 Agent 的 last_active 通常在回合结束后才更新）。
     const workingAgents = new Set()
     for (const slot of live.values()) {
-      if (slot.working && slot.ts && Date.now() - slot.ts > 10 * 60 * 1000) slot.working = false
+      // 保鲜守卫：ts 为 0（从未收到过事件）也视为过期，不能因为 falsy 短路跳过复位。
+      if (slot.working && (!slot.ts || Date.now() - slot.ts > 10 * 60 * 1000)) slot.working = false
       if (slot.working) workingAgents.add(slot.agent)
     }
     const nowSec = Math.floor(Date.now() / 1000)
