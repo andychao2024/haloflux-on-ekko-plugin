@@ -279,6 +279,12 @@ export async function mount(root, ctx) {
       // applyLive 的 10 分钟保鲜守卫（要求 slot.ts 为真值）永远无法把
       // 卡死的 working 标记复位——代理调度就会一直显示运行中。
       slot.ts = Date.now()
+      // Studio 在页面连接会话时会回放 resumed(isWorking:true)——对外部 Agent
+      // （codex CLI 进程还在注册表里）这是过期状态，回合其实早已结束。
+      // 第一次打开页面就会因此显示 codex「运行中」长达 10 分钟。
+      // 纠正：resume(true) 时异步查一次 DB 最后消息；回合已结束就立刻复位，
+      // 不等 10 分钟保鲜窗口过期。
+      if (slot.working) verifyResume(sessionId, slot)
       const plans = Array.isArray(event.taskPlans) ? event.taskPlans : []
       if (plans[0]) slot.plan = plans[0]
     }
@@ -295,6 +301,32 @@ export async function mount(root, ctx) {
       Promise.resolve(promise),
       new Promise((resolve) => setTimeout(() => resolve(null), ms))
     ])
+  }
+
+  /** resume(true) 的 DB 交叉验证：最后一条消息已完成的回合立即把 slot 复位为空闲。
+      带节流（每会话 15 秒一次），避免 resume 风暴打满会话接口。 */
+  const resumeVerifyAt = new Map()
+  function verifyResume(sessionId, slot) {
+    if (!ctx.host || !ctx.host.sessions || typeof ctx.host.sessions.messages !== 'function') return
+    const now = Date.now()
+    const last = resumeVerifyAt.get(sessionId) || 0
+    if (now - last < 15000) return
+    resumeVerifyAt.set(sessionId, now)
+    withTimeout(ctx.host.sessions.messages(sessionId, { limit: 12 }), 8000).then((res) => {
+      if (!res) return
+      const messages = res && Array.isArray(res.messages) ? res.messages : []
+      if (!messagesWorking(messages)) {
+        // 回合已结束：立刻复位，不等 10 分钟保鲜窗口
+        if (slot.working) {
+          slot.working = false
+          slot.workStartedAt = 0
+          slot.ts = Date.now() - 10 * 60 * 1000 // 让上游 ageSec 显示为"早已空闲"
+        }
+      } else {
+        // 确实在工作：刷新保鲜窗口
+        slot.ts = Date.now()
+      }
+    }).catch(() => { /* 验证失败不阻塞页面 */ })
   }
 
   function firstCheck(meta) {
