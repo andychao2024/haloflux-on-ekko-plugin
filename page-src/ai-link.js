@@ -85,9 +85,11 @@
   var CONFIG = {
     endpoint: AI_ENDPOINT(),
     pollMs: 1000,
-    requestTimeoutMs: 2600,    // /stats 要做 SQLite 聚合，留足余量避免误判断链
+    requestTimeoutMs: 5000,    // /stats 要做 SQLite 聚合；多 agent 满载时页面主线程繁忙，
+                               // 实测 bridge.stats 有 2.2s+ 尖峰，2600ms 会误判断链闪离线
     jsonpTimeoutMs: 2500,
-    offlineAfterMs: 4000,      // no good sample for this long -> LINK: OFFLINE
+    offlineAfterMs: 8000,      // no good sample for this long -> LINK: OFFLINE
+                               // 8s：容忍多 agent 满载时连续 2-3 次慢采样，单次尖峰不闪断
     position: 'top-right',     // 'bottom-left' | 'top-right' | 'off'（top-right 避让底部数据面板）
     driveVisuals: true,        // repaint the wallpaper itself (bloom/comets/flares)
     screenFx: true,            // soft full-screen bloom + sweep on strong events
@@ -1630,7 +1632,7 @@
     }).catch(function () {
       running = false;
       failStreak++;
-      timeoutNow = 700;      // short timeouts keep the 1s retry cadence while offline
+      timeoutNow = 1500;     // short timeouts keep the 1s retry cadence while offline
       // 单次超时不算断链：/stats 偶尔要做 SQLite 聚合，可能慢一拍。
       // 超过 offlineAfterMs 没有好样本才翻成离线，避免 HUD 闪红。
       var stale = !lastGoodAt || Date.now() - lastGoodAt > CONFIG.offlineAfterMs;

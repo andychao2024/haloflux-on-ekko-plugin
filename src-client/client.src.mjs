@@ -214,8 +214,6 @@ export async function mount(root, ctx) {
 
   function onLiveEvent(sessionId, meta, event) {
     const name = String((event && event.event) || '')
-    ;(window.__liveLog = window.__liveLog || []).push({ at: Date.now(), name, sid: sessionId.slice(-6) })
-    if (window.__liveLog.length > 200) window.__liveLog.splice(0, 100)
     const slot = liveSlot(sessionId, meta)
     if (name === 'reasoning.delta' || name === 'thinking.delta' || name === 'interim.delta') {
       slot.reasoning = clipText(slot.reasoning + String(event.delta || ''), 2400)
@@ -284,10 +282,7 @@ export async function mount(root, ctx) {
       // 第一次打开页面就会因此显示 codex「运行中」长达 10 分钟。
       // 纠正：resume(true) 时异步查一次 DB 最后消息；回合已结束就立刻复位，
       // 不等 10 分钟保鲜窗口过期。
-      if (slot.working) {
-        ;(window.__vrLog = window.__vrLog || []).push({ at: Date.now(), ev: 'resume-true', sid: sessionId })
-        verifyResume(sessionId, slot)
-      }
+      if (slot.working) verifyResume(sessionId, slot)
       const plans = Array.isArray(event.taskPlans) ? event.taskPlans : []
       if (plans[0]) slot.plan = plans[0]
     }
@@ -316,11 +311,9 @@ export async function mount(root, ctx) {
     if (now - last < 15000) return
     resumeVerifyAt.set(sessionId, now)
     withTimeout(ctx.host.sessions.messages(sessionId, { limit: 12 }), 8000).then((res) => {
-      ;(window.__vrLog = window.__vrLog || []).push({ at: Date.now(), ev: 'verify-done', sid: sessionId, hasRes: !!res })
       if (!res) return
       const messages = res && Array.isArray(res.messages) ? res.messages : []
       const mw = messagesWorking(messages)
-      ;(window.__vrLog = window.__vrLog || []).push({ at: Date.now(), ev: 'verify-result', sid: sessionId, working: mw, lastRole: messages.length ? messages[messages.length - 1].role : null })
       if (!mw) {
         // 回合已结束：立刻复位，不等 10 分钟保鲜窗口
         if (slot.working) {
@@ -344,12 +337,6 @@ export async function mount(root, ctx) {
     return withTimeout(ctx.host.sessions.messages(meta.id, { limit: 12 }), 8000).then((res) => {
       if (!res) return
       const messages = res && Array.isArray(res.messages) ? res.messages : []
-      ;(window.__vrLog = window.__vrLog || []).push({
-        at: Date.now(), ev: 'first-check', sid: meta.id.slice(-6),
-        working: messagesWorking(messages),
-        lastRole: messages.length ? messages[messages.length - 1].role : null,
-        total: messages.length
-      })
       if (!messagesWorking(messages)) return
       const slot = liveSlot(meta.id, meta)
       if (!slot.working) {

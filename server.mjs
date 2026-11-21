@@ -13,7 +13,7 @@ import { applyWallpaperActivity } from './src/wallpaper-activity.mjs'
 import { createConnections } from './src/conn.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.10.08'
+const VERSION = '0.10.09'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
@@ -604,7 +604,17 @@ export function apply(ctx) {
     return stats
   }
 
-  registerRpc(ctx, contract, 'stats', async (_input, run) => buildStats(run))
+  // stats RPC 的 500ms 微缓存：插件页 + 壁纸页同时高频轮询时共享同一份聚合结果，
+  // 多 agent 满载时（Studio 会话列表聚合 + pollRate 多会话用量）服务端聚合次数减半，
+  // 避免 Node 单线程事件循环被占导致 RPC 排队、页面端采样超时闪离线。
+  // 壁纸 /stats 走 live 模式，不在缓存范围内。
+  let statsCache = { at: 0, data: null }
+  registerRpc(ctx, contract, 'stats', async (_input, run) => {
+    if (statsCache.data && now() - statsCache.at < 500) return statsCache.data
+    const data = await buildStats(run)
+    statsCache = { at: now(), data }
+    return data
+  })
 
   registerRpc(ctx, contract, 'rate', async (_input, run) => {
     lastViewerAt = now()
