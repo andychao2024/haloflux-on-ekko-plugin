@@ -214,6 +214,8 @@ export async function mount(root, ctx) {
 
   function onLiveEvent(sessionId, meta, event) {
     const name = String((event && event.event) || '')
+    ;(window.__liveLog = window.__liveLog || []).push({ at: Date.now(), name, sid: sessionId.slice(-6) })
+    if (window.__liveLog.length > 200) window.__liveLog.splice(0, 100)
     const slot = liveSlot(sessionId, meta)
     if (name === 'reasoning.delta' || name === 'thinking.delta' || name === 'interim.delta') {
       slot.reasoning = clipText(slot.reasoning + String(event.delta || ''), 2400)
