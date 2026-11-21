@@ -282,13 +282,25 @@ export async function mount(root, ctx) {
 
   /** 页面首次进入时，用最后一条消息判断会话是否仍在回合中。
       Codex 等外部 Agent 的 last_active 可能很久不更新，不能只等实时事件。 */
+  // 插件重载/重装后旧 iframe 的 ctx.host 会失效，sessions.messages 可能永远不返回；
+  // stats() 里 await firstCheckAll 挂住会把 statsBusy 卡成 true，之后每次轮询都返回
+  // 缓存的 window.__hlBridge.last——整个插件页（含代理调度）冻结在旧状态。
+  // 这里给宿主调用加超时兜底，超时按「无工作信号」处理。
+  function withTimeout(promise, ms) {
+    return Promise.race([
+      Promise.resolve(promise),
+      new Promise((resolve) => setTimeout(() => resolve(null), ms))
+    ])
+  }
+
   function firstCheck(meta) {
     if (!meta || !meta.id || firstChecked.has(meta.id)) return Promise.resolve()
     firstChecked.add(meta.id)
     if (!ctx.host || !ctx.host.sessions || typeof ctx.host.sessions.messages !== 'function') {
       return Promise.resolve()
     }
-    return ctx.host.sessions.messages(meta.id, { limit: 12 }).then((res) => {
+    return withTimeout(ctx.host.sessions.messages(meta.id, { limit: 12 }), 8000).then((res) => {
+      if (!res) return
       const messages = res && Array.isArray(res.messages) ? res.messages : []
       if (!messagesWorking(messages)) return
       const slot = liveSlot(meta.id, meta)
@@ -324,9 +336,11 @@ export async function mount(root, ctx) {
     for (const meta of targets) {
       if (handles.has(meta.id)) continue
       try {
-        const handle = await ctx.host.sessions.connect(meta.id, (event) => {
+        // connect 挂住同样会卡住 stats() 的 await 链（ensureLive 在 statsBusy 区间内执行）
+        const handle = await withTimeout(ctx.host.sessions.connect(meta.id, (event) => {
           try { onLiveEvent(meta.id, meta, event) } catch (_) { /* ignore */ }
-        })
+        }), 8000)
+        if (!handle) throw new Error('connect timeout')
         handles.set(meta.id, handle)
         liveSlot(meta.id, meta)
       } catch (_) { /* ignore */ }
@@ -372,7 +386,9 @@ export async function mount(root, ctx) {
       toolBusy.add(meta.id)
       // 先占位，失败时也等 10 秒再试，避免每秒轮询打满会话接口
       toolBackfill.set(meta.id, { at: now, entries: rec ? rec.entries : [] })
-      ctx.host.sessions.messages(meta.id, { limit: 40 }).then((res) => {
+      // 同 firstCheck：宿主失效时挂起的调用要用超时兜底，避免 toolBusy 永久占住。
+      withTimeout(ctx.host.sessions.messages(meta.id, { limit: 40 }), 8000).then((res) => {
+        if (!res) return
         const messages = Array.isArray(res && res.messages) ? res.messages : []
         const previous = pendingSessions.get(meta.id)
         pendingSessions.set(meta.id, {

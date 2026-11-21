@@ -1,6 +1,6 @@
 {
   "name": "studio-plugin-haloflux-ai-link",
-  "version": "0.10.04",
+  "version": "0.10.05",
   "type": "module",
   "private": true,
   "scripts": {
