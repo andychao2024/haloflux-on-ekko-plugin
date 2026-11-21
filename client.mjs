@@ -346,6 +346,12 @@ export async function mount(root, ctx) {
     return withTimeout(ctx.host.sessions.messages(meta.id, { limit: 12 }), 8000).then((res) => {
       if (!res) return
       const messages = res && Array.isArray(res.messages) ? res.messages : []
+      ;(window.__vrLog = window.__vrLog || []).push({
+        at: Date.now(), ev: 'first-check', sid: meta.id.slice(-6),
+        working: messagesWorking(messages),
+        lastRole: messages.length ? messages[messages.length - 1].role : null,
+        total: messages.length
+      })
       if (!messagesWorking(messages)) return
       const slot = liveSlot(meta.id, meta)
       if (!slot.working) {
