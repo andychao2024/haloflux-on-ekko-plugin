@@ -366,12 +366,16 @@ export function createStore() {
       (b.active ? 1 : 0) - (a.active ? 1 : 0) || b.lastActive - a.lastActive)
 
     const streamList = []
+    // 流式 working 标记的保鲜窗口：外部 Agent（codex 等）可能收不到 run.completed，
+    // working 标记会一直挂着；超过 10 分钟没有新事件就不再当作正在工作，
+    // 与 conn.mjs 实时 slot 的 LIVE_TTL_MS 一致。
+    const STREAM_WORKING_TTL_MS = 10 * 60 * 1000
     for (const st of streams.values()) {
       if (!ok(st.profile)) continue
       if (!st.reasoning && !st.output && !st.working) continue
       const meta = sessions.get(st.sessionId) || {}
       const ageSec = st.ts ? Math.max(0, Math.round((now - st.ts) / 1000)) : null
-      const working = st.working
+      const working = st.working && (!st.ts || now - st.ts <= STREAM_WORKING_TTL_MS)
       const state = working ? 'live'
         : (meta.lastActive && t - meta.lastActive < ACTIVE_SEC) || (ageSec !== null && ageSec < ACTIVE_SEC)
           ? 'active' : 'idle'
@@ -403,7 +407,9 @@ export function createStore() {
       if (!ok(p.profile)) continue
       const meta = sessions.get(p.sessionId) || {}
       const st = streams.get(p.sessionId) || {}
-      const sessionActive = !!st.working || (meta.lastActive && t - meta.lastActive < ACTIVE_SEC)
+      // 与流式 working 同一保鲜规则：过期标记不再让任务计划挂成“进行中”。
+      const sessionActive = !!(st.working && (!st.ts || now - st.ts <= STREAM_WORKING_TTL_MS)) ||
+        (meta.lastActive && t - meta.lastActive < ACTIVE_SEC)
       planList.push({
         agent: p.agent,
         profile: p.profile,
