@@ -24,7 +24,7 @@
 
   /* ------------------------------------------------------------ settings */
 
-  var BUILD = 'v2.47';   // 写入 <html data-ai-build> 与 __aiLink.state().build，便于确认刷新到了新版
+  var BUILD = 'v2.48';   // 写入 <html data-ai-build> 与 __aiLink.state().build，便于确认刷新到了新版
   // v2.3：分享令牌 ?k= 由服务端 v1.8.0 强制校验；检测 401 时 HUD 显示"需要访问令牌"
   // v2.4：右上角新增 BGM 音乐开关（默认关闭），与"显示"按钮并排
   // v2.6：右上角两个开关统一进 flex 容器并清掉旧的 fixed 定位，窄屏换行不重叠
@@ -1463,7 +1463,10 @@
         ctl = (typeof AbortController === 'function') ? new AbortController() : null;
         timer = setTimeout(function () {
           try { if (ctl) ctl.abort(); } catch (e) { /* ignore */ }
-          finish(false, new Error('timeout'));
+          // 慢 ≠ 断：超时标记为 slow，tick 里只跳过本次采样、不推进离线状态。
+          var te = new Error('timeout');
+          te.slow = true;
+          finish(false, te);
         }, timeoutNow);
 
         fetch(CONFIG.endpoint + (CONFIG.endpoint.indexOf('?') < 0 ? '?' : '&') + 't=' + Date.now(),
@@ -1509,7 +1512,11 @@
           catch (e) { finish(false, e); }
         };
         xhr.onerror = function () { finish(false, new Error('xhr error')); };
-        xhr.ontimeout = function () { finish(false, new Error('xhr timeout')); };
+        xhr.ontimeout = function () {
+          var te = new Error('xhr timeout');
+          te.slow = true;   // 慢 ≠ 断
+          finish(false, te);
+        };
         xhr.send(null);
       } catch (e) {
         finish(false, e);
@@ -1629,17 +1636,29 @@
       try { checkBuild(data); } catch (e) { /* ignore */ }
       try { updateVisuals(data); } catch (e) { /* ignore */ }
       setTimeout(tick, CONFIG.pollMs);
-    }).catch(function () {
+    }).catch(function (e) {
       running = false;
+      // 慢 ≠ 断：多 agent 满载时采样可能慢过超时（数据其实拿到了），这不算断链——
+      // 只跳过本次采样、保持在线状态与上次数据，下次照常轮询。
+      // 只有连接层错误（网络拒绝 / HTTP 非 200 / 解析失败）才推进离线状态。
+      if (e && e.slow) {
+        timeoutNow = CONFIG.requestTimeoutMs;   // 下次给足时间
+        if (!lastGoodAt || Date.now() - lastGoodAt > CONFIG.offlineAfterMs) {
+          try { renderOffline(); } catch (e2) { /* ignore */ }
+          try { updateMotion(null); } catch (e2) { /* ignore */ }
+          try { visualIdle(); } catch (e2) { /* ignore */ }
+        }
+        setTimeout(tick, CONFIG.pollMs);
+        return;
+      }
       failStreak++;
       timeoutNow = 1500;     // short timeouts keep the 1s retry cadence while offline
-      // 单次超时不算断链：/stats 偶尔要做 SQLite 聚合，可能慢一拍。
       // 超过 offlineAfterMs 没有好样本才翻成离线，避免 HUD 闪红。
       var stale = !lastGoodAt || Date.now() - lastGoodAt > CONFIG.offlineAfterMs;
       if (stale) {
-        try { renderOffline(); } catch (e) { /* ignore */ }
-        try { updateMotion(null); } catch (e) { /* ignore */ }
-        try { visualIdle(); } catch (e) { /* ignore */ }
+        try { renderOffline(); } catch (e2) { /* ignore */ }
+        try { updateMotion(null); } catch (e2) { /* ignore */ }
+        try { visualIdle(); } catch (e2) { /* ignore */ }
       }
       logState('offline');
       setTimeout(tick, CONFIG.pollMs);
