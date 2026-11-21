@@ -564,14 +564,21 @@ export async function mount(root, ctx) {
     }
     const nowSec = Math.floor(Date.now() / 1000)
     const recentWorkIds = new Set()
+    const recentFirstActive = new Set()
     for (const meta of (d.activeSessions || []).concat(d.recentSessions || [])) {
       const last = Number(meta && meta.lastActive)
-      if (last > 0 && nowSec - (last > 1e12 ? Math.floor(last / 1000) : last) <= 600) {
-        recentWorkIds.add(meta.id)
-      }
+      if (last <= 0) continue
+      const ageSec = nowSec - (last > 1e12 ? Math.floor(last / 1000) : last)
+      if (ageSec <= 600) recentWorkIds.add(meta.id)
+      // first 短路仅放宽到 10 分钟内活跃过的会话；超过的必须靠 recentWorkIds 通道。
+      if (ageSec <= 600) recentFirstActive.add(meta.id)
     }
     for (const [id, rec] of pendingSessions) {
-      if (rec.working && Date.now() - rec.at < 60 * 1000 && (recentWorkIds.has(id) || rec.first)) {
+      // rec.first 的短路只对「最近真正活跃过」的会话生效：有些外部会话停在
+      // tool/user 结尾（中断、崩溃、CLI 断连），messagesWorking 永远是 true，
+      // 但 last_active 已经是几小时前——不能因为 first 检查就让代理调度永远显示运行中。
+      if (rec.working && Date.now() - rec.at < 60 * 1000 &&
+        (recentWorkIds.has(id) || (rec.first && recentFirstActive.has(id)))) {
         workingAgents.add(rec.agent)
       }
     }

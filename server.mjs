@@ -13,7 +13,7 @@ import { applyWallpaperActivity } from './src/wallpaper-activity.mjs'
 import { createConnections } from './src/conn.mjs'
 
 const contract = assertContracts(JSON.parse(readFileSync(new URL('./contracts/plugin.json', import.meta.url), 'utf8')))
-const VERSION = '0.10.07'
+const VERSION = '0.10.08'
 
 const SESSION_POLL_MS = 8000
 const USAGE_POLL_MS = 30000
