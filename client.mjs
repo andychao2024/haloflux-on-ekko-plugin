@@ -284,7 +284,10 @@ export async function mount(root, ctx) {
       // 第一次打开页面就会因此显示 codex「运行中」长达 10 分钟。
       // 纠正：resume(true) 时异步查一次 DB 最后消息；回合已结束就立刻复位，
       // 不等 10 分钟保鲜窗口过期。
-      if (slot.working) verifyResume(sessionId, slot)
+      if (slot.working) {
+        ;(window.__vrLog = window.__vrLog || []).push({ at: Date.now(), ev: 'resume-true', sid: sessionId })
+        verifyResume(sessionId, slot)
+      }
       const plans = Array.isArray(event.taskPlans) ? event.taskPlans : []
       if (plans[0]) slot.plan = plans[0]
     }
@@ -313,9 +316,12 @@ export async function mount(root, ctx) {
     if (now - last < 15000) return
     resumeVerifyAt.set(sessionId, now)
     withTimeout(ctx.host.sessions.messages(sessionId, { limit: 12 }), 8000).then((res) => {
+      ;(window.__vrLog = window.__vrLog || []).push({ at: Date.now(), ev: 'verify-done', sid: sessionId, hasRes: !!res })
       if (!res) return
       const messages = res && Array.isArray(res.messages) ? res.messages : []
-      if (!messagesWorking(messages)) {
+      const mw = messagesWorking(messages)
+      ;(window.__vrLog = window.__vrLog || []).push({ at: Date.now(), ev: 'verify-result', sid: sessionId, working: mw, lastRole: messages.length ? messages[messages.length - 1].role : null })
+      if (!mw) {
         // 回合已结束：立刻复位，不等 10 分钟保鲜窗口
         if (slot.working) {
           slot.working = false
